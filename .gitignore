@@ -1,0 +1,52 @@
+.idea/
+.vscode/
+node_modules/
+build/
+tmp/
+temp/
+.env
+src/entity
+src/ormconfig.ts
+yarn.lock
+build
+issueformat.md
+requests.rest
+package-lock.json
+docker-compose.yml
+package-lock.json
+
+
+.mail.ts.bk
+src/bk
+swagger.json
+todo.txt
+@eslint/
+# Add vim files
+ # Ignore Vim swap files
+*.swp*
+.swo
+
+# Ignore Vim and Neovim backup files
+*.vimbackup
+*.viminfo
+
+# Ignore Emacs backup files
+*~
+\#*\#
+*.elc
+
+# Ignore session-related files for Vim/Neovim
+
+Session.vim
+
+# Mac OS specific files
+.DS_Store
+
+coverage/
+
+CRUSH.md
+
+.spr.yml
+
+.gemini/
+gha-creds-*.json

@@ -1,0 +1,15 @@
+process.env.PORT = "8000";
+process.env.DB_USER = "postgres";
+process.env.DB_HOST = "backend_db";
+process.env.DB_PASSWORD = "postgres";
+process.env.DB_PORT = "5432";
+process.env.DB_NAME = "bukia_hft_db";
+process.env.TOKEN_SECRET = "not_safe_token_secret";
+process.env.ACCESS_TOKEN_EXPIRY = "3600";
+process.env.REFRESH_TOKEN_EXPIRY = "2592000";
+process.env.NODE_ENV = "test";
+process.env.BASE_URL = "http://localhost:2222";
+process.env.APP_SECRET = "your_super_secret_secret";
+process.env.REDIS_HOST = "redis";
+process.env.REDIS_PORT = "6379";
+process.env.WORKER_CONCURENCY = "5";
