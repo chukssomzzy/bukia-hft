@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const USER_TYPE = ["user", "admin", "business"] as const;
+export const USER_TYPE = ["User", "Admin", "Superadmin"] as const;
 
 /**
  * @openapi

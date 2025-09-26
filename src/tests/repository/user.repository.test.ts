@@ -21,7 +21,7 @@ describe("UserRepository (unit)", () => {
     it("creates entity using provided manager for non-super admin", async () => {
       const payload: Partial<User> = {
         email: "u@example.com",
-        type: UserRole.REGULAR_USER,
+        type: UserRole.USER,
       };
       const entity = { ...payload } as User;
 
@@ -113,7 +113,7 @@ describe("UserRepository (unit)", () => {
     it("uses repository instance (this) when manager not provided for non-super-admin", async () => {
       const payload: Partial<User> = {
         email: "no-mgr@example.com",
-        type: UserRole.REGULAR_USER,
+        type: UserRole.USER,
       };
       const entity = { ...payload } as User;
 
@@ -203,12 +203,12 @@ describe("UserRepository (unit)", () => {
 
       const res = await UserRepository.findByTypes([
         UserRole.ADMIN,
-        UserRole.REGULAR_USER,
+        UserRole.USER,
       ]);
 
       expect(spy).toHaveBeenCalledWith("user");
       expect(qb.where).toHaveBeenCalledWith("user.type IN (:...types)", {
-        types: [UserRole.ADMIN, UserRole.REGULAR_USER],
+        types: [UserRole.ADMIN, UserRole.USER],
       });
       expect(qb.getMany).toHaveBeenCalled();
       expect(res).toBe(expected as unknown as User[]);

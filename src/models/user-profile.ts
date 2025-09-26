@@ -16,9 +16,6 @@ export class UserProfile extends ExtendedBaseEntity<string> {
   @DeleteDateColumn({ nullable: true })
   deletedAt: Date;
 
-  @Column({ nullable: true })
-  dob: Date;
-
   @Column()
   firstName: string;
 

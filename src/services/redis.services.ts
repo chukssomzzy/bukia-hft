@@ -28,14 +28,14 @@ export class RedisService {
     return this.getClient().duplicate(this.options);
   }
 
-  public static getClient(): RedisClient {
+  public static getClient: () => RedisClient = () => {
     if (!this.client) {
       this.client = new Redis(
         this.options ?? { enableReadyCheck: false, maxRetriesPerRequest: null },
       );
     }
-    return this.client;
-  }
+    return this.client as RedisClient;
+  };
 
   public static async healthCheck(): Promise<boolean> {
     try {

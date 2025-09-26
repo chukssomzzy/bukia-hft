@@ -1,8 +1,13 @@
 import { z } from "zod";
 
 import { AdminSchema } from "./admin.schema";
-export const USER_TYPE = ["user", "admin", "business", "superadmin"] as const;
+export const USER_TYPE = ["User", "Admin", "Superadmin"] as const;
 export const JWT_TYPE = ["access", "refresh"] as const;
+export const OTP_PURPOSE = [
+  "emailVerification",
+  "passwordReset",
+  "authorize",
+] as const;
 
 /**
  * @openapi
@@ -18,9 +23,9 @@ export const JWT_TYPE = ["access", "refresh"] as const;
  *         - password
  *         - phoneNumber
  *       properties:
- *         dob:
+ *         country:
  *           type: string
- *           format: date
+ *           example: NG
  *         email:
  *           type: string
  *           format: email
@@ -31,9 +36,6 @@ export const JWT_TYPE = ["access", "refresh"] as const;
  *         password:
  *           type: string
  *           description: Strong password (min 8 chars, upper/lowercase, digit, special char)
- *         phone:
- *           type: string
- *           description: International format (e.g. +123456789)
  *         type:
  *           type: string
  *           enum: [user, admin, business]
@@ -119,9 +121,11 @@ export const JWT_TYPE = ["access", "refresh"] as const;
  *           type: boolean
  *
  */
-
 export const RegisterUserRequestSchema = z.object({
-  dob: z.string().date().nonempty(),
+  country: z
+    .string()
+    .length(2, "Country code must be two letters")
+    .transform((val) => val.toUpperCase()),
   email: z.string().email().nonempty(),
   firstName: z.string().nonempty(),
   lastName: z.string().nonempty(),
@@ -135,10 +139,6 @@ export const RegisterUserRequestSchema = z.object({
       /[^A-Za-z0-9]/,
       "Password must contain at least one special character",
     ),
-  phone: z
-    .string()
-    .nonempty()
-    .regex(/^\+[1-9]\d{1,14}$/, "Invalid international phone number format"),
   type: z.enum(USER_TYPE).default(USER_TYPE[0]),
 });
 
@@ -197,15 +197,67 @@ export const ResetPasswordRequestSchema = z.object({
     ),
 });
 
+/**
+ * @openapi
+ * components:
+ *   schemas:
+ *     GetOtpRequest:
+ *       type: object
+ *       required:
+ *         - email
+ *         - purpose
+ *       properties:
+ *         email:
+ *           type: string
+ *           format: email
+ *         purpose:
+ *           type: string
+ *           enum: [emailVerification, passwordReset, authorize]
+ */
+export const GetOtpSchema = z.object({
+  email: z.string().email(),
+  purpose: z.enum(OTP_PURPOSE).default(OTP_PURPOSE[0]),
+});
+
+/**
+ * @openapi
+ * components:
+ *   schemas:
+ *     ValidateOtp:
+ *       type: object
+ *       required:
+ *         - email
+ *         - otp
+ *       properties:
+ *         email:
+ *           type: string
+ *           format: email
+ *         otp:
+ *           type: string
+ *           minLength: 6
+ *           maxLength: 6
+ *           pattern: '^\d{6}$'
+ */
+export const ValidateOtpSchema = z.object({
+  email: z.string().email(),
+  otp: z
+    .string()
+    .length(6, "OTP must be 6 digits")
+    .regex(/^\d{6}$/, "OTP must be numeric"),
+  purpose: z.enum(OTP_PURPOSE).default(OTP_PURPOSE[0]),
+});
+
 export type ResetPasswordRequestType = z.infer<
   typeof ResetPasswordRequestSchema
 >;
 
 export const MeResponseSchema = z.discriminatedUnion("type", [AdminSchema]);
 
+export type GetOtpType = z.infer<typeof GetOtpSchema>;
 export type JWTRefreshType = z.infer<typeof JWTRefreshRequestSchema>;
 export type JWTUserPayloadType = z.infer<typeof JWTUserPayloadSchema>;
 export type LoginUserRequestType = z.infer<typeof LoginUserRequestSchema>;
 export type LoginUserResponseType = z.infer<typeof LoginUserResponseSchema>;
 export type MeResponseType = z.infer<typeof MeResponseSchema>;
 export type RegisterUserRequestType = z.infer<typeof RegisterUserRequestSchema>;
+export type ValidateOtpType = z.infer<typeof ValidateOtpSchema>;

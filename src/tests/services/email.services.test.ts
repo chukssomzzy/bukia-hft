@@ -1,6 +1,5 @@
 import type { Redis as RedisClient } from "ioredis";
 
-// Hoisted mocks so we can use top-level imports
 const addMock = jest.fn();
 const closeMock = jest.fn();
 const duplicateMock = jest.fn(() => ({}) as RedisClient);

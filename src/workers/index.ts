@@ -3,7 +3,8 @@ import { RedisService } from "../services/redis.services";
 import log from "../utils/logger";
 export const connection = RedisService.duplicate();
 
-// import "./email.worker";
+import "./transfer.worker";
+import "./email.worker";
 
 if (!AppDataSource.isInitialized) {
   AppDataSource.initialize().then(() => log.info("App data source intialized"));

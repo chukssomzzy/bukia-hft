@@ -1,4 +1,5 @@
 import AppDataSource from "../data-source";
+import { emailService } from "./email.services";
 import { RedisService } from "./redis.services";
 
 export interface ServiceHealthStatus {
@@ -9,6 +10,7 @@ export interface ServiceHealthStatus {
 export class HealthService {
   private static registered = [
     { check: () => RedisService.healthCheck(), name: "redis" },
+    { check: () => emailService.healthCheck(), name: "email" },
     {
       check: async () => {
         try {

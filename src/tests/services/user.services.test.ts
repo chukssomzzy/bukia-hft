@@ -23,7 +23,7 @@ describe("UserServices", () => {
       id: 10,
       lastName: "Doe",
     },
-    type: "user",
+    type: "Admin",
   };
 
   afterEach(() => {

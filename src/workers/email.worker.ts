@@ -9,7 +9,6 @@ const worker = new Worker(
   "email",
   async (job) => {
     await emailService.processJob(job.data);
-    log.info({ event: "email_job_completed", jobId: job.id, to: job.data.to });
   },
   { concurrency: config.WORKER_CONCURRENCY, connection },
 );

@@ -2,7 +2,9 @@ import { RateLimitError } from "../../middleware";
 import { RedisService } from "../../services/redis.services";
 import { RateLimitByKey, RateLimitOptions } from "../../utils";
 
-jest.mock("../../services/redis.services");
+jest.mock("../../services/redis.services", () => ({
+  RedisService: { getClient: jest.fn() },
+}));
 jest.mock("../../middleware", () => ({
   RateLimitError: jest
     .fn()
@@ -30,7 +32,7 @@ describe("RateLimitByKey decorator", () => {
       eval: jest.fn(),
       ttl: jest.fn(),
     };
-    (RedisService.getClient as jest.Mock).mockReturnValue(mockRedisClient);
+    RedisService.getClient = jest.fn().mockReturnValue(mockRedisClient);
 
     mockTarget = {};
     originalMethod = jest.fn<Promise<string>, [string]>();

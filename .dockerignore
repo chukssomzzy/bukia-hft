@@ -12,3 +12,4 @@ docker-compose.yml
 .vscode
 .idea
 *.md
+package-lock.json

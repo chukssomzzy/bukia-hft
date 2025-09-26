@@ -4,6 +4,7 @@ import {
   DeleteDateColumn,
   Entity,
   JoinColumn,
+  OneToMany,
   OneToOne,
   PrimaryGeneratedColumn,
   TableInheritance,
@@ -13,6 +14,7 @@ import {
 
 import ExtendedBaseEntity from "./extended-base-entity";
 import { UserProfile } from "./user-profile";
+import { Wallet } from "./wallet";
 
 @Entity()
 @TableInheritance({
@@ -55,6 +57,9 @@ export class User extends ExtendedBaseEntity {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @OneToMany(() => Wallet, (wallet) => wallet.user)
+  wallets: Wallet[];
 
   async hashPassword(password: string): Promise<string> {
     const salt = await bcrypt.genSalt(10);

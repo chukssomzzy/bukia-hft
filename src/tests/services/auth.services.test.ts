@@ -9,19 +9,31 @@ import {
   LoginUserResponseSchema,
   RegisterUserRequestType,
 } from "../../schema/auth.schema";
-import { AuthServices } from "../../services/auth.services";
+import type { AuthServices as AuthServicesClass } from "../../services/auth.services";
+let AuthServices: new (...args: unknown[]) => AuthServicesClass;
 import { RateLimitOptions } from "../../utils";
 import { signAccessToken, signRefreshToken, verifyJWT } from "../../utils/auth";
 
-jest.mock("../../repositories/user.repository");
+jest.mock("../../repositories/user.repository", () => ({
+  UserRepository: {
+    findOne: jest.fn(),
+    findWithProfile: jest.fn(),
+    create: jest.fn(),
+    save: jest.fn(),
+  },
+}));
 jest.mock("../../models/user");
 jest.mock("../../utils/auth");
 jest.mock("../../services/redis.services", () => ({
   RedisService: {
     getClient: jest.fn().mockReturnValue({
       del: jest.fn(),
-      get: jest.fn(),
-      set: jest.fn(),
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue("OK"),
+      ttl: jest.fn().mockResolvedValue(0),
+      eval: jest.fn().mockResolvedValue(0),
+      evalsha: jest.fn().mockResolvedValue([0, 0]),
+      script: jest.fn().mockResolvedValue("sha"),
     }),
   },
 }));
@@ -52,6 +64,19 @@ jest.mock("../../utils", () => ({
     },
 }));
 
+jest.mock("../../utils/lockout", () => ({
+  __esModule: true,
+  default: (_redis: unknown, _opts: unknown) => (
+    _target: object,
+    _propertyKey: string | symbol,
+    descriptor: PropertyDescriptor,
+  ) => descriptor,
+}));
+
+// Import the module after mocks to ensure decorators use mocked redis
+const authMod = require("../../services/auth.services") as { AuthServices: typeof AuthServicesClass };
+AuthServices = authMod.AuthServices;
+
 jest.mock("../../utils/db", () => ({
   Transactional:
     () =>
@@ -76,7 +101,7 @@ describe("AuthServices.loginUser", () => {
   });
 
   it("throws Unauthorized for invalid login", async () => {
-    (UserRepository.findOne as jest.Mock).mockResolvedValue(null);
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(null);
     const payload: LoginUserRequestType = {
       email: basePayload.email,
       password: basePayload.password,
@@ -90,10 +115,10 @@ describe("AuthServices.loginUser", () => {
       id: 1,
       isverified: true,
       jwtVersion: 0,
-      type: "user",
+      type: "User",
       validatePassword: jest.fn().mockResolvedValue(true),
     };
-    (UserRepository.findOne as jest.Mock).mockResolvedValue(user);
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(user);
     (signAccessToken as jest.Mock).mockReturnValue(ACCESS_TOKEN);
     (signRefreshToken as jest.Mock).mockReturnValue(REFRESH_TOKEN);
     const payload: LoginUserRequestType = {
@@ -114,32 +139,34 @@ describe("AuthServices.loginUser", () => {
       id: 1,
       isverified: true,
       jwtVersion: 0,
-      type: "user",
+      type: "User",
       validatePassword: jest.fn().mockResolvedValue(true),
     };
-    (UserRepository.findOne as jest.Mock).mockResolvedValue(user);
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(user);
 
     const response = await service.loginUser(basePayload);
     expect(response.accessToken).toBeDefined();
     expect(response.refreshToken).toBeDefined();
-    expect(response.role).toBe("user");
+    expect(response.role).toBe("User");
     expect(user.validatePassword).toHaveBeenCalledWith(basePayload.password);
   });
 
-  it("should throw Unauthorized if user is not verified", async () => {
+  it("should allow login even if user is not verified", async () => {
     const user = {
       ...basePayload,
       id: 2,
       isverified: false,
       jwtVersion: 0,
-      type: "user",
+      type: "User",
       validatePassword: jest.fn().mockResolvedValue(true),
     };
-    (UserRepository.findOne as jest.Mock).mockResolvedValue(user);
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(user);
 
-    await expect(service.loginUser(basePayload)).rejects.toThrow(
-      "Invalid email or password",
-    );
+    const response = await service.loginUser(basePayload);
+    expect(response.accessToken).toBeDefined();
+    expect(response.refreshToken).toBeDefined();
+    expect(response.role).toBe("User");
+    expect(user.validatePassword).toHaveBeenCalledWith(basePayload.password);
   });
 
   it("should throw Unauthorized if password is invalid", async () => {
@@ -148,10 +175,10 @@ describe("AuthServices.loginUser", () => {
       id: 3,
       isverified: true,
       jwtVersion: 0,
-      type: "user",
+      type: "User",
       validatePassword: jest.fn().mockResolvedValue(false),
     };
-    (UserRepository.findOne as jest.Mock).mockResolvedValue(user);
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(user);
 
     await expect(service.loginUser(basePayload)).rejects.toThrow(
       "Invalid email or password",
@@ -159,7 +186,7 @@ describe("AuthServices.loginUser", () => {
   });
 
   it("should throw Unauthorized if user does not exist", async () => {
-    (UserRepository.findOne as jest.Mock).mockResolvedValue(null);
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(null);
 
     await expect(service.loginUser(basePayload)).rejects.toThrow(
       "Invalid email or password",
@@ -170,13 +197,12 @@ describe("AuthServices.loginUser", () => {
 describe("AuthServices.refreshToken", () => {
   const service = new AuthServices();
   const basePayload: RegisterUserRequestType = {
-    dob: "2000-01-01",
+    country: "NG",
     email: "test@example.com",
     firstName: "John",
     lastName: "Doe",
     password: "password123A!",
-    phone: "+1234567890",
-    type: "user",
+    type: "User",
   };
 
   beforeEach(() => {
@@ -188,7 +214,7 @@ describe("AuthServices.refreshToken", () => {
       ...basePayload,
       id: 1,
       jwtVersion: 0,
-      type: "user",
+      type: "User",
     };
     (verifyJWT as jest.Mock).mockReturnValue({
       email: basePayload.email,
@@ -250,13 +276,12 @@ describe("AuthServices.refreshToken", () => {
 describe("AuthServices.logout", () => {
   const service = new AuthServices();
   const basePayload: RegisterUserRequestType = {
-    dob: "2000-01-01",
+    country: "NG",
     email: "test@example.com",
     firstName: "John",
     lastName: "Doe",
     password: "password123A!",
-    phone: "+1234567890",
-    type: "user",
+    type: "User",
   };
 
   beforeEach(() => {
@@ -284,10 +309,10 @@ describe("AuthServices.logout", () => {
 });
 
 describe("AuthServices.registerUser", () => {
-  let service: AuthServices;
+  let service: AuthServicesClass;
   let mockManager: { getRepository: jest.Mock; save: jest.Mock };
   let basePayload: RegisterUserRequestType;
-  let mockUserProfile: UserUserProfile;
+  let mockUserProfile: UserProfile;
   let mockUser: User;
 
   beforeEach(() => {
@@ -296,18 +321,20 @@ describe("AuthServices.registerUser", () => {
       getRepository: jest.fn(),
       save: jest.fn(),
     };
+    mockManager.getRepository.mockReturnValue({
+      create: jest.fn().mockReturnValue({}),
+      save: jest.fn().mockResolvedValue({}),
+    });
     basePayload = {
-      dob: "2000-01-01",
+      country: "NG",
       email: "superadmin@example.com",
       firstName: "Super",
       lastName: "Admin",
       password: "password123A!",
-      phone: "+1234567890",
-      type: "superadmin",
+      type: "Superadmin",
     };
     mockUserProfile = {
       ...basePayload,
-      dob: new Date(basePayload.dob),
     } as UserProfile;
     mockUser = { ...basePayload, id: 1, profile: mockUserProfile } as User;
 
@@ -321,6 +348,10 @@ describe("AuthServices.registerUser", () => {
     );
     (UserRepository.create as jest.Mock).mockReturnValue(mockUser);
     (mockManager.save as jest.Mock).mockResolvedValue(mockUser);
+    mockManager.getRepository.mockReturnValue({
+      create: jest.fn().mockReturnValue({}),
+      save: jest.fn().mockResolvedValue({}),
+    });
     (User.prototype.hashPassword as jest.Mock).mockResolvedValue(
       "hashedPassword",
     );
@@ -331,7 +362,7 @@ describe("AuthServices.registerUser", () => {
     );
 
     expect(UserProfileRepository.create).toHaveBeenCalledWith(
-      { ...basePayload, dob: new Date(basePayload.dob) },
+      { ...basePayload },
       mockManager as unknown as EntityManager,
     );
 
@@ -470,11 +501,10 @@ describe("AuthServices.registerUser", () => {
   it("creates user with regular type successfully", async () => {
     const regularPayload: RegisterUserRequestType = {
       ...basePayload,
-      type: "user",
+      type: "User",
     };
     const regularUserProfile: UserProfile = {
       ...regularPayload,
-      dob: new Date(regularPayload.dob),
     } as UserProfile;
     const regularUser: User = {
       ...regularPayload,
