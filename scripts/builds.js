@@ -1,8 +1,10 @@
-const fs = require("fs");
-const path = require("path");
+#!/usr/bin/env node
+const { copyEjsFiles } = require("./copy-ejs-to-build");
 
-// Attach build time scripts here
-function main() {}
+function main() {
+  copyEjsFiles();
+}
+
 try {
   main();
 } catch (err) {
