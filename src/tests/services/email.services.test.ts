@@ -10,8 +10,8 @@ const findByTypesMock = jest.fn();
 
 jest.mock("../../providers", () => ({
   AwsSesProvider: jest.fn().mockImplementation(() => ({
-    send: providerSendMock,
     healthCheck: providerHealthMock,
+    send: providerSendMock,
   })),
 }));
 

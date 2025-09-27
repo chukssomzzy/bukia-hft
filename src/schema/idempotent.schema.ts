@@ -29,10 +29,10 @@ export const IdempotentParamsSchema = z.object({
 });
 
 export const IdempotentStatusSchema = z.object({
-  status: z.enum(["pending", "processing", "completed", "failed"]),
-  progress: z.number().min(0).max(100).optional(),
   completed: z.boolean(),
+  progress: z.number().min(0).max(100).optional(),
   response: z.any().nullable().optional(),
+  status: z.enum(["pending", "processing", "completed", "failed"]),
 });
 
 export type IdempotentParamsType = z.infer<typeof IdempotentParamsSchema>;

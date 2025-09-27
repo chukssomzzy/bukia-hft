@@ -120,7 +120,7 @@ Uniqueness, idempotency, and reconciliation
 
 Operational & query notes
 
-- Querying recent wallet balance changes: SELECT * FROM ledger_entry WHERE walletId = $1 ORDER BY id DESC LIMIT 100;
+- Querying recent wallet balance changes: SELECT \* FROM ledger_entry WHERE walletId = $1 ORDER BY id DESC LIMIT 100;
 - Reconciliation on duplicate key: search ledger_entry by idempotencyKey and/or txId to decide whether a retry should return success, return stored response, or raise an error.
 - Archival/retention: append-only tables will grow. Consider partitioning (by time or walletId) or periodic export/archival to cheaper storage for long-term retention in production systems.
 
@@ -143,7 +143,7 @@ Validation and shaping responses
 
 - Response shaping: controllers use a single helper sendJsonResponse (src/utils/send-json-response.ts) to return a consistent JSON envelope: { data, message, status, statusCode }. Controllers call services which return plain JS objects or repository results; controllers avoid returning raw ORM entity objects directly to the client and instead pass curated data into sendJsonResponse.
 
-- DTOs and schemas: request/response shapes are defined in src/schema/* using zod. Controllers and services rely on these schemas for input validation and to document expected shapes in the codebase.
+- DTOs and schemas: request/response shapes are defined in src/schema/\* using zod. Controllers and services rely on these schemas for input validation and to document expected shapes in the codebase.
 
 - Audit sanitization: admin audit log entries are sanitized before enqueueing using the deny-list sanitizer with HMAC truncation (src/utils/audit-sanitizer.ts). Sensitive fields (password, token, secret, cardNumber, etc.) are replaced with HMAC-truncated placeholders so entries remain linkable for forensics without exposing raw secrets.
 

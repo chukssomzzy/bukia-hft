@@ -5,11 +5,7 @@ import type { CurrencyConversionService } from "../../services/currency-converti
 
 import { IdempotencyRepository } from "../../repositories/idempotency.repository";
 import { WalletRepository } from "../../repositories/wallet.repository";
-import {
-  OptimisticLockError,
-  PermanentError,
-  TransferServices,
-} from "../../services/transfer.services";
+import { TransferServices } from "../../services/transfer.services";
 
 interface ProtoWithAdd {
   addTransferJob(

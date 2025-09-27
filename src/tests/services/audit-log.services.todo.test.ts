@@ -22,4 +22,3 @@ describe("AdminAuditLogService", () => {
     it.todo("is a no-op when queue is not initialized");
   });
 });
-

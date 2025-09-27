@@ -1,9 +1,9 @@
 export const UserRepository = {
+  create: jest.fn(),
+  findByTypes: jest.fn(),
   findOne: jest.fn(),
   findWithProfile: jest.fn(),
-  create: jest.fn(),
   save: jest.fn(),
-  findByTypes: jest.fn(),
 };
 
 export const UserProfileRepository = {

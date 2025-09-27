@@ -1,14 +1,14 @@
 const mockRedisInstance = {
+  del: jest.fn().mockResolvedValue(1),
   duplicate: jest.fn().mockReturnThis(),
-  ping: jest.fn().mockResolvedValue("PONG"),
-  quit: jest.fn().mockResolvedValue("OK"),
   eval: jest.fn().mockResolvedValue(1),
   evalsha: jest.fn().mockResolvedValue([0, 0]),
-  script: jest.fn().mockResolvedValue("sha"),
-  ttl: jest.fn().mockResolvedValue(0),
-  del: jest.fn().mockResolvedValue(1),
-  set: jest.fn().mockResolvedValue("OK"),
   get: jest.fn().mockResolvedValue(null),
+  ping: jest.fn().mockResolvedValue("PONG"),
+  quit: jest.fn().mockResolvedValue("OK"),
+  script: jest.fn().mockResolvedValue("sha"),
+  set: jest.fn().mockResolvedValue("OK"),
+  ttl: jest.fn().mockResolvedValue(0),
 };
 
 const Redis = jest.fn(() => mockRedisInstance);

@@ -48,8 +48,12 @@ export class WalletServices {
     return wallet;
   }
 
-  public async getWalletsForUser(userId: number): Promise<WalletListResponseType> {
-    return WalletRepository.getWalletsForUser(userId) as unknown as WalletListResponseType;
+  public async getWalletsForUser(
+    userId: number,
+  ): Promise<WalletListResponseType> {
+    return WalletRepository.getWalletsForUser(
+      userId,
+    ) as unknown as WalletListResponseType;
   }
 }
 

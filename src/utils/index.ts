@@ -11,7 +11,6 @@ export const Limiter = rateLimit({
 
 export { sanitizeAudit } from "./audit-sanitizer";
 
-
 export interface RateLimitOptions<
   T extends (...args: ReadonlyArray<unknown>) => Promise<unknown>,
 > {

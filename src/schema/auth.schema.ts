@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { AdminSchema } from "./admin.schema";
 import { SuperAdminSchema } from "./superadmin.schema";
-import { RegularUserSchema, UserSchema } from "./user.schema";
+import { RegularUserSchema } from "./user.schema";
 export const USER_TYPE = ["User", "Admin", "Superadmin"] as const;
 export const JWT_TYPE = ["access", "refresh"] as const;
 export const OTP_PURPOSE = [
