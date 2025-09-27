@@ -129,7 +129,6 @@ export const LedgerRepository = AppDataSource.getRepository(LedgerEntry).extend(
         .groupBy("l.type")
         .getRawMany();
 
-      // Normalize types: count -> number, total -> string
       return (res as Array<{ count: string; total: string; type: string }>).map(
         (r) => ({
           count: Number(r.count ?? 0),
@@ -137,6 +136,27 @@ export const LedgerRepository = AppDataSource.getRepository(LedgerEntry).extend(
           type: r.type,
         }),
       );
+    },
+
+    async getEntriesForUser(
+      userId: number,
+      page: number = 1,
+      pageSize: number = 10,
+      sort: string,
+      manager?: EntityManager,
+    ) {
+      const repo = manager ? manager.getRepository(LedgerEntry) : this;
+      const qb = repo
+        .createQueryBuilder("l")
+        .leftJoinAndSelect("l.wallet", "w")
+        .where('w."userId" = :userId', { userId })
+        .orderBy("l.createdAt", sort)
+        .skip((page - 1) * pageSize)
+        .take(pageSize);
+
+      const [items, total] = await qb.getManyAndCount();
+
+      return { items, page, pageSize, total };
     },
 
     async getLargestByCurrencyForUser(userId: number, manager?: EntityManager) {
@@ -165,6 +185,37 @@ export const LedgerRepository = AppDataSource.getRepository(LedgerEntry).extend(
         .where('w."userId" = :userId', { userId })
         .getRawOne();
       return res?.max ?? "0";
+    },
+
+    async getTotalTransferCount(manager?: EntityManager) {
+      const repo = manager ? manager.getRepository(LedgerEntry) : this;
+      const res = await repo
+        .createQueryBuilder("l")
+        .select("COUNT(l.id)", "count")
+        .where("l.type = :type", { type: "debit" })
+        .getRawOne();
+      return Number(res?.count ?? 0);
+    },
+
+    async getTotalTransfersByCurrency(manager?: EntityManager) {
+      const repo = manager ? manager.getRepository(LedgerEntry) : this;
+      const res = await repo
+        .createQueryBuilder("l")
+        .select("w.currency", "currency")
+        .addSelect("COUNT(l.id)", "count")
+        .addSelect("COALESCE(SUM(l.amount),0)", "total")
+        .innerJoin("wallet", "w", 'w.id = l."walletId"')
+        .where("l.type = :type", { type: "debit" })
+        .groupBy("w.currency")
+        .getRawMany();
+
+      return (
+        res as Array<{ count: string; currency: string; total: string }>
+      ).map((r) => ({
+        count: Number(r.count ?? 0),
+        currency: r.currency,
+        total: r.total ?? "0",
+      }));
     },
 
     async getTransactionCountForUser(userId: number, manager?: EntityManager) {

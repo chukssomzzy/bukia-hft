@@ -32,37 +32,16 @@ function isValidCurrencyCode(code: string): boolean {
  *           $ref: '#/components/schemas/AnalyticsBreakdown'
  */
 
-const preprocessToNumber = (val: unknown) => {
-  if (val == null) return 0;
-  if (typeof val === "number") return val;
-  if (typeof val === "string") {
-    const n = Number(val);
-    return Number.isFinite(n) ? n : 0;
-  }
-  if (typeof val === "bigint") return Number(val);
-  return 0;
-};
-
-const preprocessToString = (val: unknown) => {
-  if (val == null) return "0";
-  if (typeof val === "string") return val;
-  if (typeof val === "number" || typeof val === "bigint") return String(val);
-  return String(val);
-};
-
 export const AnalyticsBreakdownSchema = z.object({
-  count: z.preprocess(preprocessToNumber, z.number().int().nonnegative()),
-  total: z.preprocess(preprocessToString, z.string()),
+  count: z.number().int().nonnegative(),
+  total: z.string(),
 });
 export const UserAnalyticsResponseSchema = z.object({
   credits: AnalyticsBreakdownSchema,
   currency: z.string(),
   debits: AnalyticsBreakdownSchema,
-  largestTransfer: z.preprocess(preprocessToString, z.string()),
-  totalTransactions: z.preprocess(
-    preprocessToNumber,
-    z.number().int().nonnegative(),
-  ),
+  largestTransfer: z.string(),
+  totalTransactions: z.number().int().nonnegative(),
 });
 
 /**
@@ -90,6 +69,33 @@ export const UserAnalyticsQuerySchema = z.object({
     }),
 });
 
+export const SystemSummaryCurrencyBreakdownSchema = z.object({
+  count: z.number().int().nonnegative(),
+  currency: z.string(),
+  total: z.string(),
+});
+
+export const SystemSummaryResponseSchema = z.object({
+  currency: z.string(),
+  currencyBreakdown: z.array(SystemSummaryCurrencyBreakdownSchema),
+  totalTransfersCount: z.number().int().nonnegative(),
+  totalValue: z.string(),
+});
+
+export const SystemSummaryQuerySchema = z.object({
+  currency: z
+    .string()
+    .optional()
+    .transform((c) =>
+      typeof c === "string" && c.trim() ? c.toUpperCase() : "USD",
+    )
+    .refine(isValidCurrencyCode, { message: "Invalid currency code" }),
+});
+
+export type SystemSummaryQueryType = z.infer<typeof SystemSummaryQuerySchema>;
+export type SystemSummaryResponseType = z.infer<
+  typeof SystemSummaryResponseSchema
+>;
 export type UserAnalyticsQueryType = z.infer<typeof UserAnalyticsQuerySchema>;
 export type UserAnalyticsResponseType = z.infer<
   typeof UserAnalyticsResponseSchema

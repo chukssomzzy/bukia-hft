@@ -1,5 +1,6 @@
 import { Router } from "express";
 
+import adminUserRouter from "./admin-user.routes";
 import analyticsRouter from "./analytics.routes";
 import authRouter from "./auth.routes";
 import healthcheckRoute from "./healthcheck.routes";
@@ -17,5 +18,6 @@ apiRouter.use("/transfers", transferRoute);
 apiRouter.use("/idempotent", idempotentRoute);
 apiRouter.use("/healthcheck", healthcheckRoute);
 apiRouter.use("/analytics", analyticsRouter);
+apiRouter.use("/admin", adminUserRouter);
 
 export default apiRouter;

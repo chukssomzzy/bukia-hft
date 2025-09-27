@@ -17,10 +17,9 @@ import { z } from "zod";
  *           format: date
  */
 export const UserProfileSchema = z.object({
-  dob: z.date(),
-  firstName: z.string(),
+  firstName: z.string().optional().nullable(),
   id: z.number(),
-  lastName: z.string(),
+  lastName: z.string().nullable(),
 });
 
 export type UserProfileType = z.infer<typeof UserProfileSchema>;

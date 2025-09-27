@@ -3,6 +3,7 @@ import Redis from "ioredis";
 
 import { UserRole } from "../enums/user-roles";
 import { Forbidden, Unauthorized } from "../middleware/error";
+import { OTP_PURPOSE } from "../schema";
 
 /**
  * Generic decorator to inject an `authorized` flag based on a Redis key.
@@ -11,10 +12,8 @@ import { Forbidden, Unauthorized } from "../middleware/error";
  */
 export function isAuthorized<T extends { email: string }>(
   redis: Redis,
-  options?: { keyPrefix?: string },
+  keyPrefix = "otp_verified",
 ) {
-  options.keyPrefix = options?.keyPrefix ?? "otp_verified";
-
   return function (
     _target: object,
     _propertyKey: string | symbol,
@@ -25,8 +24,11 @@ export function isAuthorized<T extends { email: string }>(
     const original = descriptor.value!;
     descriptor.value = async function (payload: T, ...args: unknown[]) {
       let authorized = false;
-      const redisKey = `${options.keyPrefix}:${payload.email}:authorized`;
+      const redisKey = `${keyPrefix}:${payload.email}:${OTP_PURPOSE[2]}`;
       authorized = !!(await redis.get(redisKey));
+      if (authorized) {
+        await redis.del(redisKey);
+      }
       return original.call(this, payload, ...args, authorized);
     };
   };

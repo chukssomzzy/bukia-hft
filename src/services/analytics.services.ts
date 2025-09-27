@@ -1,5 +1,7 @@
 import { LedgerRepository } from "../repositories";
 import {
+  SystemSummaryResponseSchema,
+  SystemSummaryResponseType,
   UserAnalyticsResponseSchema,
   UserAnalyticsResponseType,
 } from "../schema/analytics.schema";
@@ -64,6 +66,60 @@ export class AnalyticsServices {
         error: (err as Error).message,
         event: "analytics_failure",
         userId,
+      });
+      throw err;
+    }
+  }
+
+  @cacheable<[string], SystemSummaryResponseType>({
+    keyGenerator: (baseCurrency: string) =>
+      `analytics:system:summary:currency:${baseCurrency}`,
+    lockKeyGenerator: () => `analytics:system:summary:lock`,
+    lockTtlSeconds: 5,
+    ttlSeconds: CACHE_TTL,
+  })
+  public async getSystemSummary(
+    baseCurrency: string = "USD",
+  ): Promise<SystemSummaryResponseType> {
+    try {
+      const breakdown = await LedgerRepository.getTotalTransfersByCurrency();
+      const totalCount = await LedgerRepository.getTotalTransferCount();
+
+      const converted = await Promise.all(
+        breakdown.map(async (r) => {
+          const amt = Number(r.total ?? "0");
+          const conv = await currencyConversionService.convert(
+            amt,
+            r.currency,
+            baseCurrency,
+          );
+          return { count: r.count, currency: r.currency, total: conv };
+        }),
+      );
+
+      const totalValue = converted.reduce((s, r) => s + (r.total ?? 0), 0);
+
+      const result = SystemSummaryResponseSchema.parse({
+        currency: baseCurrency,
+        currencyBreakdown: converted.map((c) => ({
+          count: c.count,
+          currency: c.currency,
+          total: String(c.total),
+        })),
+        totalTransfersCount: totalCount,
+        totalValue: String(totalValue),
+      });
+
+      log.info({
+        baseCurrency,
+        cacheTtl: CACHE_TTL,
+        event: "system_summary_computed",
+      });
+      return result;
+    } catch (err) {
+      log.error({
+        error: (err as Error).message,
+        event: "system_summary_failure",
       });
       throw err;
     }

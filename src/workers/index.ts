@@ -5,6 +5,7 @@ export const connection = RedisService.duplicate();
 
 import "./transfer.worker";
 import "./email.worker";
+import "./audit.worker.ts";
 
 if (!AppDataSource.isInitialized) {
   AppDataSource.initialize().then(() => log.info("App data source intialized"));

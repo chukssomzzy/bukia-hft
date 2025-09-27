@@ -52,14 +52,14 @@ export const CreateWalletBodySchema = z.object({
  *         - updatedAt
  */
 export const WalletResponseSchema = z.object({
-  balance: z.string(),
-  version: z.number().optional(),
-  createdAt: z.string(),
+  balance: z.string().nullable(),
+  createdAt: z.date().nullable(),
   currency: z.string(),
   id: z.number(),
-  isDefault: z.boolean(),
-  updatedAt: z.string(),
-  userId: z.number(),
+  isDefault: z.boolean().nullable(),
+  updatedAt: z.date(),
+  userId: z.number().nullable(),
+  version: z.number().optional().nullable(),
 });
 
 /**

@@ -94,6 +94,11 @@ export function lockout<Args extends unknown[] = unknown[], R = unknown>(
       const lockKey = `${baseConfig.redisKeyPrefix}:lock:${baseConfig.serviceName}:${method}:${identifier}`;
       const failKey = `${baseConfig.redisKeyPrefix}:fails:${baseConfig.serviceName}:${method}:${identifier}`;
 
+      const ttl = await redis.ttl(lockKey);
+      if (ttl && ttl > 0) {
+        throw new RateLimitError("Too many attempts, locked", ttl);
+      }
+
       try {
         const result = await Promise.resolve(original.apply(this, args));
 

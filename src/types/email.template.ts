@@ -1,5 +1,11 @@
+export interface AdminResetPasswordEmailData {
+  firstName: string;
+  tempPassword: string;
+}
+
 export interface EmailTemplateMap {
   /* eslint-disable @typescript-eslint/naming-convention */
+  "admin.password-reset.success": AdminResetPasswordEmailData;
   "user.otp": OtpEmailData;
   "user.password-reset.success": PasswordResetSuccessData;
   "user.transfer-received": TransferReceivedEmailData;

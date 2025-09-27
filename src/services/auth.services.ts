@@ -125,7 +125,7 @@ export class AuthServices {
   })
   public async loginUser(
     payload: LoginUserRequestType,
-    authorized: boolean,
+    authorized?: boolean,
   ): Promise<LoginUserResponseType> {
     const user = await UserRepository.findWithProfile({
       where: { email: payload.email },
@@ -135,12 +135,11 @@ export class AuthServices {
       !user ||
       !(await user.validatePassword(payload.password)) ||
       !user.isverified
-    ) {
+    )
       throw new Unauthorized("Invalid email or password");
-    }
 
     if (
-      user.type.includes([UserRole.ADMIN, UserRole.SUPER_ADMIN]) &&
+      [UserRole.ADMIN, UserRole.SUPER_ADMIN].includes(user.type) &&
       !authorized
     )
       throw new Unauthorized("Not authorized");

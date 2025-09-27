@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import { AuthController } from "../controllers/auth.controller";
+import { auditMiddleware } from "../middleware/audit-log";
 import { authenticateJWT } from "../middleware/auth";
 import { validateRequestBody } from "../middleware/request-validation";
 import {
@@ -24,6 +25,7 @@ authRoute.post(
 authRoute.post(
   "/login",
   validateRequestBody(LoginUserRequestSchema),
+  auditMiddleware("Logged In"),
   authController.loginUser,
 );
 

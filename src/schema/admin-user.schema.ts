@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { PaginationQuerySchema } from "./index";
+
+import { MeResponseSchema, PaginationQuerySchema } from "./index";
 import { UserProfileSchema } from "./user-profile.schema";
 
 /**
@@ -41,14 +42,17 @@ import { UserProfileSchema } from "./user-profile.schema";
  */
 
 export const AdminUserListQuerySchema = PaginationQuerySchema.extend({
-  search: z.string().optional(),
   role: z.string().optional(),
+  search: z.string().optional(),
 });
 
 export const AdminUserEditBodySchema = z.object({
   email: z.string().email().optional(),
-  country: z.string().length(2).transform((s) => s.toUpperCase()).optional(),
   profile: UserProfileSchema.partial().optional(),
+});
+
+export const AdminLockOutUserRequestSchema = z.object({
+  numberOfMinsToLockUser: z.number().default(30),
 });
 
 export const AdminResetPasswordBodySchema = z.object({
@@ -58,9 +62,33 @@ export const AdminResetPasswordBodySchema = z.object({
     .regex(/[A-Z]/)
     .regex(/[a-z]/)
     .regex(/[0-9]/)
-    .regex(/[^A-Za-z0-9]/),
+    .regex(/[^A-Za-z0-9]/)
+    .optional(),
 });
 
-export type AdminUserListQueryType = z.infer<typeof AdminUserListQuerySchema>;
+export const AdminUserListResponseSchema = z.object({
+  items: z.array(MeResponseSchema.nullable()).nullable(),
+  page: z.number().nullable(),
+  pageSize: z.number().nullable(),
+  total: z.number().nullable(),
+});
+
+export const AdminResetPasswordResponseSchema = z.object({
+  tempPassword: z.string().optional(),
+});
+
+export type AdminLockOutUserRequestType = z.infer<
+  typeof AdminLockOutUserRequestSchema
+>;
+export type AdminResetPasswordBodyType = z.infer<
+  typeof AdminResetPasswordBodySchema
+>;
+export type AdminResetPasswordResponseType = z.infer<
+  typeof AdminResetPasswordResponseSchema
+>;
+
 export type AdminUserEditBodyType = z.infer<typeof AdminUserEditBodySchema>;
-export type AdminResetPasswordBodyType = z.infer<typeof AdminResetPasswordBodySchema>;
+export type AdminUserListQueryType = z.infer<typeof AdminUserListQuerySchema>;
+export type AdminUserListResponseType = z.infer<
+  typeof AdminUserListResponseSchema
+>;

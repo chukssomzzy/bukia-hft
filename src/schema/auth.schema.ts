@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 import { AdminSchema } from "./admin.schema";
+import { SuperAdminSchema } from "./superadmin.schema";
+import { RegularUserSchema, UserSchema } from "./user.schema";
 export const USER_TYPE = ["User", "Admin", "Superadmin"] as const;
 export const JWT_TYPE = ["access", "refresh"] as const;
 export const OTP_PURPOSE = [
@@ -85,7 +87,6 @@ export const OTP_PURPOSE = [
  *             - $ref: '#/components/schemas/UserProfile'
  *             - allOf:
  *                 - $ref: '#/components/schemas/UserProfile'
- *                 - $ref: '#/components/schemas/BusinessProfile'
  *
  *     JWTRefreshRequest:
  *       type: object
@@ -251,7 +252,11 @@ export type ResetPasswordRequestType = z.infer<
   typeof ResetPasswordRequestSchema
 >;
 
-export const MeResponseSchema = z.discriminatedUnion("type", [AdminSchema]);
+export const MeResponseSchema = z.discriminatedUnion("type", [
+  AdminSchema,
+  RegularUserSchema,
+  SuperAdminSchema,
+]);
 
 export type GetOtpType = z.infer<typeof GetOtpSchema>;
 export type JWTRefreshType = z.infer<typeof JWTRefreshRequestSchema>;

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { UserProfileSchema } from "./user-profile.schema";
+
 export const USER_TYPE = ["User", "Admin", "Superadmin"] as const;
 
 /**
@@ -26,11 +28,15 @@ export const USER_TYPE = ["User", "Admin", "Superadmin"] as const;
  */
 export const UserSchema = z.object({
   createdAt: z.date(),
-  email: z.string(),
+  email: z.string().nullable(),
   id: z.number(),
   isverified: z.boolean(),
-  phone: z.string(),
+  profile: UserProfileSchema.nullable(),
   type: z.enum(USER_TYPE),
+});
+
+export const RegularUserSchema = UserSchema.extend({
+  type: z.literal(USER_TYPE[0]),
 });
 
 export type UserType = z.infer<typeof UserSchema>;
