@@ -108,6 +108,53 @@ export class TransferServices {
     return { transferId: null };
   }
 
+  public async sendTransferStatusEmail(
+    payload: TransferRequestType & { userId: number },
+    status: "completed" | "failed" | "pending",
+    reason?: string,
+    txId?: string,
+  ) {
+    const sender = await UserRepository.findWithProfile({
+      where: { id: payload.userId },
+    });
+    await emailService.send(
+      sender.email,
+      "user.transfer-status",
+      {
+        amount: payload?.amount,
+        currency: payload?.currency,
+        firstName: sender?.profile?.firstName,
+        fromWalletId: payload?.fromWalletId,
+        reason,
+        status,
+        toWalletId: payload?.toWalletId,
+        txId,
+      },
+      "Transfer " + status,
+    );
+
+    if (status === "completed") {
+      const recipient = await WalletRepository.findUserByWallet(
+        payload.toWalletId,
+      );
+      if (recipient && recipient?.email) {
+        await emailService.send(
+          recipient?.email,
+          "user.transfer-received",
+          {
+            amount: payload?.amount,
+            currency: payload?.currency,
+            firstName: recipient?.profile?.firstName,
+            fromName: sender?.profile?.firstName,
+            toWalletId: payload?.toWalletId,
+            txId,
+          },
+          "Transfer received to your wallet",
+        );
+      }
+    }
+  }
+
   private async addTransferJob(
     payload: TransferRequestType,
     options?: JobsOptions,
@@ -364,53 +411,6 @@ export class TransferServices {
     }
 
     return null;
-  }
-
-  private async sendTransferStatusEmail(
-    payload: TransferRequestType & { userId: number },
-    status: "completed" | "failed" | "pending",
-    reason?: string,
-    txId?: string,
-  ) {
-    const sender = await UserRepository.findWithProfile({
-      where: { id: payload.userId },
-    });
-    await emailService.send(
-      sender.email,
-      "user.transfer-status",
-      {
-        amount: payload?.amount,
-        currency: payload?.currency,
-        firstName: sender?.profile?.firstName,
-        fromWalletId: payload?.fromWalletId,
-        reason,
-        status,
-        toWalletId: payload?.toWalletId,
-        txId,
-      },
-      "Transfer " + status,
-    );
-
-    if (status === "completed") {
-      const recipient = await WalletRepository.findUserByWallet(
-        payload.toWalletId,
-      );
-      if (recipient && recipient?.email) {
-        await emailService.send(
-          recipient?.email,
-          "user.transfer-received",
-          {
-            amount: payload?.amount,
-            currency: payload?.currency,
-            firstName: recipient?.profile?.firstName,
-            fromName: sender?.profile?.firstName,
-            toWalletId: payload?.toWalletId,
-            txId,
-          },
-          "Transfer received to your wallet",
-        );
-      }
-    }
   }
 
   private shouldRetryOptimisticLock(

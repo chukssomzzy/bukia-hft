@@ -72,6 +72,81 @@ Why this idempotency approach
 
 - Combining an application-level idempotency table with DB-level uniqueness provides both fast rejection of duplicates and a final safety-net in the DB. The approach is resilient to process crashes, multi-instance deployment, and retries coming from clients or the queue system.
 
+Ledger & audit trail (migrations)
+
+This project enforces two append-only, auditable tables via migrations: ledger_entry (financial ledger) and admin_audit_log (administrative audit trail). Both are designed for immutability, uniqueness guarantees, and efficient querying. See migrations in src/migrations for the exact SQL applied (notable files: 1758835010813-migration.ts, 1758849478430-migration.ts, 1758920863839-migration.ts).
+
+Ledger table (ledger_entry)
+
+- Purpose: store immutable, append-only ledger rows that record debits/credits against wallets and form the canonical history of money movements.
+- Columns added by migration:
+  - id (SERIAL PRIMARY KEY)
+  - createdAt, updatedAt (timestamps)
+  - amount (numeric)
+  - idempotencyKey (nullable varchar) — link back to idempotency/transfer attempts
+  - txId (nullable varchar) — optional external transaction id
+  - type (varchar) — e.g. 'debit' or 'credit'
+  - walletId (integer) — FK to wallet
+  - metadata (json) — arbitrary structured context
+- Immutability enforcement: a PL/pgSQL trigger/function (prevent_ledger_modification) raises an exception on UPDATE or DELETE. This guarantees rows are append-only at the DB level and prevents accidental or malicious edits.
+- Uniqueness & indexes:
+  - UNIQUE INDEX ON txId where txId IS NOT NULL — prevents double-booking for the same external transaction id.
+  - UNIQUE INDEX ON (idempotencyKey, type) where idempotencyKey IS NOT NULL AND type IS NOT NULL — ensures the same idempotencyKey doesn't create duplicate entries for the same side/type. (See migration 1758849478430 which replaces a previous idempotencyKey-only unique index.)
+  - INDEX ON walletId — supports querying all ledger entries for a wallet efficiently.
+- Referential integrity: foreign key constraint to wallet(id) ensures ledger rows always reference an existing wallet.
+
+Audit trail table (admin_audit_log)
+
+- Purpose: record admin actions in an append-only audit log for accountability and forensic tracing.
+- Columns in migration:
+  - id (SERIAL PRIMARY KEY)
+  - action (varchar) — action name
+  - adminUserId (integer) — FK to admin user
+  - details (jsonb) — structured details about the action
+  - ipAddress (varchar) — optional source ip
+  - targetUserId (integer) — optional affected user id
+  - timestamp (varchar) — recorded timestamp string (could be ISO)
+- Immutability enforcement: the migration installs a trigger/function (prevent_admin_audit_log_modification) that prevents UPDATE or DELETE, making the table append-only.
+
+Why append-only and DB triggers?
+
+- Financial and audit records must be tamper-evident. Appending only and preventing modification at the DB level reduces risk of accidental or malicious changes and simplifies forensic analysis.
+- Triggers provide a straightforward, low-level enforcement mechanism that works regardless of application code paths or potential bugs in the app logic.
+
+Uniqueness, idempotency, and reconciliation
+
+- The ledger idempotency unique constraint protects against duplicate ledger rows for the same logical transfer attempt. The service also checks for Postgres unique-violation errors (23505) during transfer processing and attempts reconciliation by fetching existing ledger/transfer records for the idempotencyKey.
+- This two-layer approach (app-level idempotency record + DB unique index) provides both fast rejection and a final safety net.
+
+Operational & query notes
+
+- Querying recent wallet balance changes: SELECT * FROM ledger_entry WHERE walletId = $1 ORDER BY id DESC LIMIT 100;
+- Reconciliation on duplicate key: search ledger_entry by idempotencyKey and/or txId to decide whether a retry should return success, return stored response, or raise an error.
+- Archival/retention: append-only tables will grow. Consider partitioning (by time or walletId) or periodic export/archival to cheaper storage for long-term retention in production systems.
+
+Migration files of note
+
+- src/migrations/1758835010813-migration.ts — initial ledger_entry + idempotency table + wallet.version
+- src/migrations/1758849478430-migration.ts — refines unique index to include type as part of uniqueness
+- src/migrations/1758920863839-migration.ts — creates admin_audit_log and its immutability trigger
+
+Security & audit considerations
+
+- Audit log entries contain structured details and must avoid storing secrets. Ensure application code sanitizes any sensitive fields before writing.
+- Database roles and permissions should restrict who can DROP/TRIGGER/ALTER these tables. Consider making audit and ledger tables accessible only to a limited DB role.
+
+Validation and shaping responses
+
+- Request validation: the code uses zod schemas for validating incoming requests. Middleware helpers live in src/middleware/request-validation.ts and expose validateRequestBody, validateRequestParams, and validateRequestQuery. Each helper parses the incoming payload with a zod schema and replaces req.body/req.params/req.query with the parsed, typed value. Validation failures are converted to a ValidationError (422) and forwarded to the central error handler (src/middleware/error.ts).
+
+- Error handling: the central error middleware maps application errors (including ValidationError/InvalidInput) to structured HTTP responses with status and optional errors payload. Validation errors surface the zod error details under the errors key for clients to inspect.
+
+- Response shaping: controllers use a single helper sendJsonResponse (src/utils/send-json-response.ts) to return a consistent JSON envelope: { data, message, status, statusCode }. Controllers call services which return plain JS objects or repository results; controllers avoid returning raw ORM entity objects directly to the client and instead pass curated data into sendJsonResponse.
+
+- DTOs and schemas: request/response shapes are defined in src/schema/* using zod. Controllers and services rely on these schemas for input validation and to document expected shapes in the codebase.
+
+- Audit sanitization: admin audit log entries are sanitized before enqueueing using the deny-list sanitizer with HMAC truncation (src/utils/audit-sanitizer.ts). Sensitive fields (password, token, secret, cardNumber, etc.) are replaced with HMAC-truncated placeholders so entries remain linkable for forensics without exposing raw secrets.
+
 Why BullMQ
 
 - Robustness: BullMQ (backed by Redis) supports retries, delayed jobs, job attempts, backoff strategies and visibility into failed/completed jobs.
