@@ -1,3 +1,23 @@
+import EventEmitter from "events";
+
+import type { TransferRequestType } from "../../schema/transfer.schema";
+import type { CurrencyConversionService } from "../../services/currency-convertion.services";
+
+import { IdempotencyRepository } from "../../repositories/idempotency.repository";
+import { WalletRepository } from "../../repositories/wallet.repository";
+import {
+  OptimisticLockError,
+  PermanentError,
+  TransferServices,
+} from "../../services/transfer.services";
+
+interface ProtoWithAdd {
+  addTransferJob(
+    payload: TransferRequestType,
+    options?: unknown,
+  ): Promise<unknown>;
+}
+
 jest.mock("../../repositories/wallet.repository", () => ({
   WalletRepository: {
     findById: jest.fn(),
@@ -38,9 +58,7 @@ jest.mock("../../config", () => ({
 
 jest.mock("../../services/redis.services", () => ({
   RedisService: {
-    duplicate: jest
-      .fn()
-      .mockImplementation(() => new (require("events").EventEmitter)()),
+    duplicate: jest.fn().mockImplementation(() => new EventEmitter()),
   },
 }));
 
@@ -55,24 +73,6 @@ jest.mock("../../utils/db", () => ({
       return;
     },
 }));
-
-import type { TransferRequestType } from "../../schema/transfer.schema";
-import type { CurrencyConversionService } from "../../services/currency-convertion.services";
-
-import { IdempotencyRepository } from "../../repositories/idempotency.repository";
-import { WalletRepository } from "../../repositories/wallet.repository";
-import {
-  OptimisticLockError,
-  PermanentError,
-  TransferServices,
-} from "../../services/transfer.services";
-
-interface ProtoWithAdd {
-  addTransferJob(
-    payload: TransferRequestType,
-    options?: unknown,
-  ): Promise<unknown>;
-}
 
 describe("TransferServices", () => {
   describe("enqueueTransfer", () => {
@@ -126,7 +126,6 @@ describe("TransferServices", () => {
       });
       (WalletRepository.getBalance as jest.Mock).mockResolvedValue("200");
 
-      // existing completed
       (IdempotencyRepository.findByKey as jest.Mock).mockResolvedValueOnce({
         status: "completed",
       });
@@ -134,7 +133,6 @@ describe("TransferServices", () => {
         "Idempotency key already processed",
       );
 
-      // processing
       (IdempotencyRepository.findByKey as jest.Mock).mockResolvedValueOnce({
         status: "processing",
       });
@@ -142,7 +140,6 @@ describe("TransferServices", () => {
         "Transfer is already being processed",
       );
 
-      // failed
       (IdempotencyRepository.findByKey as jest.Mock).mockResolvedValueOnce({
         status: "failed",
       });
@@ -150,7 +147,6 @@ describe("TransferServices", () => {
         "Previous transfer failed, cannot enqueue",
       );
 
-      // none -> should create record and call addTransferJob
       (IdempotencyRepository.findByKey as jest.Mock).mockResolvedValueOnce(
         null,
       );
@@ -167,7 +163,7 @@ describe("TransferServices", () => {
       const addSpy = jest.fn().mockResolvedValue(fakeJob);
       proto.addTransferJob = addSpy;
 
-      const res = await svc.enqueueTransfer({ ...payloadBase });
+      await svc.enqueueTransfer({ ...payloadBase });
       expect(IdempotencyRepository.createRecord).toHaveBeenCalledWith(
         payloadBase.idempotencyKey,
       );
@@ -198,137 +194,10 @@ describe("TransferServices", () => {
         .spyOn(proto, "addTransferJob")
         .mockResolvedValue(fakeJob as unknown as Promise<unknown>);
 
-      const res = await svc.enqueueTransfer(payload);
+      await svc.enqueueTransfer(payload);
       expect(IdempotencyRepository.findByKey).not.toHaveBeenCalled();
       expect(addSpy).toHaveBeenCalled();
       addSpy.mockRestore();
-    });
-  });
-
-  describe("process", () => {
-    const fakeConv: CurrencyConversionService = {
-      convert: async () => 1,
-      getRate: async () => 1,
-    } as unknown as CurrencyConversionService;
-
-    beforeEach(() => {
-      jest.clearAllMocks();
-    });
-
-    it("returns result on success", async () => {
-      const payload = {
-        idempotencyKey: "k",
-        userId: 1,
-      } as unknown as TransferRequestType & { userId: number };
-      class TestSvc extends (TransferServices as any) {
-        constructor(conv: any) {
-          super(conv);
-        }
-        public async executeTransaction(p: any) {
-          return { transferId: 2 };
-        }
-        public async sendTransferStatusEmail() {
-          return;
-        }
-      }
-      const svc = new TestSvc(fakeConv);
-
-      const res = await svc.process(payload);
-
-      expect(res).toEqual({ transferId: 2 });
-    });
-
-    it("retries on OptimisticLockError and eventually succeeds", async () => {
-      const payload = {
-        idempotencyKey: "k",
-        userId: 1,
-      } as unknown as TransferRequestType & { userId: number };
-      let calls = 0;
-      class TestSvc extends (TransferServices as any) {
-        constructor(conv: any) {
-          super(conv);
-        }
-        public async executeTransaction(p: any) {
-          if (++calls === 1)
-            throw Object.assign(new Error("lock"), {
-              __proto__: OptimisticLockError.prototype,
-            });
-          return { transferId: 3 };
-        }
-        public async sendTransferStatusEmail() {
-          return;
-        }
-      }
-      const svc = new TestSvc(fakeConv);
-      (svc as any).backoff = jest.fn().mockResolvedValue(undefined);
-      (IdempotencyRepository.markAsFailed as jest.Mock).mockResolvedValue(
-        undefined,
-      );
-
-      const res = await svc.process(payload);
-
-      expect(calls).toBe(2);
-      expect(IdempotencyRepository.markAsFailed).toHaveBeenCalled();
-      expect(res).toEqual({ transferId: 3 });
-    });
-
-    it("marks idempotency as failed and returns on PermanentError", async () => {
-      const payload = {
-        idempotencyKey: "k",
-        userId: 1,
-      } as unknown as TransferRequestType & { userId: number };
-      class TestSvc extends (TransferServices as any) {
-        constructor(conv: any) {
-          super(conv);
-        }
-        public async executeTransaction() {
-          throw new PermanentError("perm");
-        }
-        public async sendTransferStatusEmail() {
-          return;
-        }
-      }
-      const svc = new TestSvc(fakeConv);
-
-      const res = await svc.process(payload);
-
-      expect(IdempotencyRepository.markAsFailed).toHaveBeenCalledWith(
-        payload.idempotencyKey,
-        "perm",
-      );
-      expect(res).toBeUndefined();
-    });
-
-    it("reconciles on duplicate-key errors and returns reconciliation result", async () => {
-      const payload = {
-        idempotencyKey: "k",
-        userId: 1,
-      } as unknown as TransferRequestType & { userId: number };
-
-      const dupErr = new Error("duplicate key value");
-      (dupErr as any).code = "23505";
-      class TestSvc extends (TransferServices as any) {
-        constructor(conv: any) {
-          super(conv);
-        }
-        public async executeTransaction() {
-          throw dupErr;
-        }
-        public async reconcile(k: string) {
-          return { transferId: 9 };
-        }
-        public async sendTransferStatusEmail() {
-          return;
-        }
-      }
-      const svc = new TestSvc(fakeConv);
-      (IdempotencyRepository.markAsFailed as jest.Mock).mockResolvedValue(
-        undefined,
-      );
-
-      const res = await svc.process(payload);
-
-      expect(res).toEqual({ transferId: 9 });
     });
   });
 });

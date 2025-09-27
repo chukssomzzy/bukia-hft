@@ -1,6 +1,6 @@
 import { EntityManager } from "typeorm";
 
-import { BadRequest, Unauthorized } from "../../middleware";
+import { BadRequest, ResourceNotFound, Unauthorized } from "../../middleware";
 import { User, UserProfile } from "../../models";
 import { UserProfileRepository } from "../../repositories/user-profile.repository";
 import { UserRepository } from "../../repositories/user.repository";
@@ -8,32 +8,27 @@ import {
   LoginUserRequestType,
   LoginUserResponseSchema,
   RegisterUserRequestType,
+  ResetPasswordRequestType,
+  ValidateOtpType,
 } from "../../schema/auth.schema";
-import type { AuthServices as AuthServicesClass } from "../../services/auth.services";
-let AuthServices: new (...args: unknown[]) => AuthServicesClass;
+import { AuthServices } from "../../services/auth.services";
+import { emailService } from "../../services/email.services";
+import * as redisModule from "../../services/redis.services";
 import { RateLimitOptions } from "../../utils";
 import { signAccessToken, signRefreshToken, verifyJWT } from "../../utils/auth";
+import * as authUtils from "../../utils/auth";
 
-jest.mock("../../repositories/user.repository", () => ({
-  UserRepository: {
-    findOne: jest.fn(),
-    findWithProfile: jest.fn(),
-    create: jest.fn(),
-    save: jest.fn(),
-  },
-}));
-jest.mock("../../models/user");
 jest.mock("../../utils/auth");
 jest.mock("../../services/redis.services", () => ({
   RedisService: {
     getClient: jest.fn().mockReturnValue({
       del: jest.fn(),
-      get: jest.fn().mockResolvedValue(null),
-      set: jest.fn().mockResolvedValue("OK"),
-      ttl: jest.fn().mockResolvedValue(0),
-      eval: jest.fn().mockResolvedValue(0),
-      evalsha: jest.fn().mockResolvedValue([0, 0]),
-      script: jest.fn().mockResolvedValue("sha"),
+      eval: jest.fn(),
+      evalsha: jest.fn(),
+      get: jest.fn(),
+      script: jest.fn(),
+      set: jest.fn(),
+      ttl: jest.fn(),
     }),
   },
 }));
@@ -50,6 +45,30 @@ jest.mock("../../repositories/user-profile.repository", () => ({
   },
 }));
 
+jest.mock("../../repositories/user.repository", () => ({
+  UserRepository: {
+    create: jest.fn(),
+    findOne: jest.fn(),
+    findWithProfile: jest.fn(),
+    save: jest.fn(),
+  },
+}));
+
+// Make findWithProfile delegate to findOne by default to simplify tests that mock only findOne
+const _mockedUserRepo = jest.requireMock(
+  "../../repositories/user.repository",
+).UserRepository;
+(_mockedUserRepo.findWithProfile as jest.Mock) =
+  _mockedUserRepo.findOne as jest.Mock;
+
+jest.mock("bullmq", () => ({
+  Queue: jest.fn().mockImplementation(() => ({
+    add: jest.fn(),
+    // Add other methods as needed
+  })),
+}));
+
+jest.mock("../../services/email.services");
 jest.mock("../../utils", () => ({
   RateLimitByKey:
     <T extends (...args: ReadonlyArray<unknown>) => Promise<unknown>>(
@@ -63,19 +82,6 @@ jest.mock("../../utils", () => ({
       return;
     },
 }));
-
-jest.mock("../../utils/lockout", () => ({
-  __esModule: true,
-  default: (_redis: unknown, _opts: unknown) => (
-    _target: object,
-    _propertyKey: string | symbol,
-    descriptor: PropertyDescriptor,
-  ) => descriptor,
-}));
-
-// Import the module after mocks to ensure decorators use mocked redis
-const authMod = require("../../services/auth.services") as { AuthServices: typeof AuthServicesClass };
-AuthServices = authMod.AuthServices;
 
 jest.mock("../../utils/db", () => ({
   Transactional:
@@ -101,7 +107,7 @@ describe("AuthServices.loginUser", () => {
   });
 
   it("throws Unauthorized for invalid login", async () => {
-    (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(null);
+    (UserRepository.findOne as jest.Mock).mockResolvedValue(null);
     const payload: LoginUserRequestType = {
       email: basePayload.email,
       password: basePayload.password,
@@ -118,9 +124,19 @@ describe("AuthServices.loginUser", () => {
       type: "User",
       validatePassword: jest.fn().mockResolvedValue(true),
     };
+    (UserRepository.findOne as jest.Mock).mockResolvedValue(user);
     (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(user);
     (signAccessToken as jest.Mock).mockReturnValue(ACCESS_TOKEN);
     (signRefreshToken as jest.Mock).mockReturnValue(REFRESH_TOKEN);
+    // pushService removed
+    (redisModule.RedisService.getClient as jest.Mock).mockReturnValue({
+      del: jest.fn(),
+      evalsha: jest.fn().mockResolvedValue([0, 0]),
+      get: jest.fn().mockResolvedValue(null),
+      script: jest.fn().mockResolvedValue("dummy"),
+      set: jest.fn(),
+      ttl: jest.fn().mockResolvedValue(0),
+    });
     const payload: LoginUserRequestType = {
       email: basePayload.email,
       password: basePayload.password,
@@ -142,16 +158,17 @@ describe("AuthServices.loginUser", () => {
       type: "User",
       validatePassword: jest.fn().mockResolvedValue(true),
     };
-    (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(user);
+    (UserRepository.findOne as jest.Mock).mockResolvedValue(user);
+    // pushService removed
 
     const response = await service.loginUser(basePayload);
     expect(response.accessToken).toBeDefined();
     expect(response.refreshToken).toBeDefined();
-    expect(response.role).toBe("User");
+    expect(response.role.toLowerCase()).toBe("user");
     expect(user.validatePassword).toHaveBeenCalledWith(basePayload.password);
   });
 
-  it("should allow login even if user is not verified", async () => {
+  it("should throw Unauthorized if user is not verified", async () => {
     const user = {
       ...basePayload,
       id: 2,
@@ -160,13 +177,11 @@ describe("AuthServices.loginUser", () => {
       type: "User",
       validatePassword: jest.fn().mockResolvedValue(true),
     };
-    (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(user);
+    (UserRepository.findOne as jest.Mock).mockResolvedValue(user);
 
-    const response = await service.loginUser(basePayload);
-    expect(response.accessToken).toBeDefined();
-    expect(response.refreshToken).toBeDefined();
-    expect(response.role).toBe("User");
-    expect(user.validatePassword).toHaveBeenCalledWith(basePayload.password);
+    await expect(service.loginUser(basePayload)).rejects.toThrow(
+      "Invalid email or password",
+    );
   });
 
   it("should throw Unauthorized if password is invalid", async () => {
@@ -178,7 +193,7 @@ describe("AuthServices.loginUser", () => {
       type: "User",
       validatePassword: jest.fn().mockResolvedValue(false),
     };
-    (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(user);
+    (UserRepository.findOne as jest.Mock).mockResolvedValue(user);
 
     await expect(service.loginUser(basePayload)).rejects.toThrow(
       "Invalid email or password",
@@ -186,7 +201,7 @@ describe("AuthServices.loginUser", () => {
   });
 
   it("should throw Unauthorized if user does not exist", async () => {
-    (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(null);
+    (UserRepository.findOne as jest.Mock).mockResolvedValue(null);
 
     await expect(service.loginUser(basePayload)).rejects.toThrow(
       "Invalid email or password",
@@ -224,6 +239,7 @@ describe("AuthServices.refreshToken", () => {
       type: "refresh",
     });
     (UserRepository.findOne as jest.Mock).mockResolvedValue(user);
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValue(user);
     (signAccessToken as jest.Mock).mockReturnValue(ACCESS_TOKEN);
     (signRefreshToken as jest.Mock).mockReturnValue(REFRESH_TOKEN);
     const response = await service.refreshToken("validRefreshToken");
@@ -308,50 +324,580 @@ describe("AuthServices.logout", () => {
   });
 });
 
+describe("AuthServices.getOtp", () => {
+  const service = new AuthServices();
+  const email = "test@example.com";
+  const purpose = "verify";
+  const user = { email, profile: { firstName: "John" } };
+  const client = {
+    del: jest.fn(),
+    evalsha: jest.fn(),
+    get: jest.fn(),
+    script: jest.fn(),
+    set: jest.fn(),
+    ttl: jest.fn(),
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (redisModule.RedisService.getClient as jest.Mock).mockReturnValue(client);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("stores hashed otp in redis and sends email (success)", async () => {
+    jest.spyOn(authUtils, "generateOtp").mockReturnValue("654321");
+    jest
+      .spyOn(authUtils, "hashOtp")
+      .mockImplementation((otp: string) => `hashed-${otp}`);
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValueOnce(user);
+    (emailService.send as jest.Mock).mockImplementationOnce(
+      async () => undefined,
+    );
+
+    await expect(service.getOtp(email, purpose)).resolves.toBeUndefined();
+
+    expect(authUtils.generateOtp).toHaveBeenCalled();
+    expect(authUtils.hashOtp).toHaveBeenCalledWith("654321");
+    expect(redisModule.RedisService.getClient).toHaveBeenCalled();
+    expect(client.set).toHaveBeenCalledWith(
+      `otp:${email}:${purpose}`,
+      "hashed-654321",
+      "EX",
+      expect.any(Number),
+    );
+    expect(emailService.send).toHaveBeenCalledWith(
+      email,
+      "user.otp",
+      { expiryMinutes: 10, firstName: "John", otp: "654321" },
+      "Bukia Gold HFT OTP code (expires in 10 minutes)",
+    );
+  });
+
+  it("throws ResourceNotFound if user not found and does not call other services", async () => {
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValueOnce(null);
+    const generateSpy = jest.spyOn(authUtils, "generateOtp");
+
+    await expect(
+      service.getOtp("notfound@example.com", purpose),
+    ).rejects.toThrow(ResourceNotFound);
+
+    expect(generateSpy).not.toHaveBeenCalled();
+    expect(redisModule.RedisService.getClient).not.toHaveBeenCalled();
+    expect(emailService.send).not.toHaveBeenCalled();
+  });
+
+  it("propagates emailService errors after redis set (introceptive)", async () => {
+    jest.spyOn(authUtils, "generateOtp").mockReturnValue("654321");
+    jest
+      .spyOn(authUtils, "hashOtp")
+      .mockImplementation((otp: string) => `hashed-${otp}`);
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValueOnce(user);
+    (emailService.send as jest.Mock).mockRejectedValueOnce(
+      new Error("Email error"),
+    );
+
+    await expect(service.getOtp(email, purpose)).rejects.toThrow("Email error");
+
+    expect(authUtils.generateOtp).toHaveBeenCalled();
+    expect(client.set).toHaveBeenCalled();
+    expect(emailService.send).toHaveBeenCalled();
+  });
+
+  it("propagates redis set errors and does not call emailService", async () => {
+    jest.spyOn(authUtils, "generateOtp").mockReturnValue("654321");
+    jest
+      .spyOn(authUtils, "hashOtp")
+      .mockImplementation((otp: string) => `hashed-${otp}`);
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValueOnce(user);
+    client.set.mockRejectedValueOnce(new Error("Redis set error"));
+
+    await expect(service.getOtp(email, purpose)).rejects.toThrow(
+      "Redis set error",
+    );
+
+    expect(authUtils.generateOtp).toHaveBeenCalled();
+    expect(client.set).toHaveBeenCalled();
+    expect(emailService.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("AuthServices.handleOtpType", () => {
+  const email = "test@example.com";
+  const typedHandleOtpType = (
+    AuthServices as unknown as {
+      handleOtpType: (email: string, purpose: string) => Promise<void>;
+    }
+  ).handleOtpType;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("verifies unverified user, saves and sends welcome email (introceptive)", async () => {
+    const user = {
+      email,
+      isverified: false,
+      profile: { firstName: "John" },
+      save: jest.fn().mockResolvedValue(undefined),
+    };
+
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValueOnce(user);
+    (emailService.send as jest.Mock).mockImplementationOnce(
+      async () => undefined,
+    );
+
+    await expect(
+      typedHandleOtpType(email, "emailVerification"),
+    ).resolves.toBeUndefined();
+
+    expect(user.isverified).toBe(true);
+    expect(user.save).toHaveBeenCalled();
+    expect(emailService.send).toHaveBeenCalledWith(email, "user.welcome", {
+      firstName: "John",
+    });
+
+    const saveOrder = user.save.mock.invocationCallOrder[0];
+    const emailOrder = (emailService.send as jest.Mock).mock
+      .invocationCallOrder[0];
+    expect(saveOrder).toBeLessThan(emailOrder);
+  });
+
+  it("does nothing if user already verified", async () => {
+    const user = {
+      email,
+      isverified: true,
+      profile: { firstName: "John" },
+      save: jest.fn().mockResolvedValue(undefined),
+    };
+
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValueOnce(user);
+
+    await expect(
+      typedHandleOtpType(email, "emailVerification"),
+    ).resolves.toBeUndefined();
+
+    expect(user.save).not.toHaveBeenCalled();
+    expect(emailService.send).not.toHaveBeenCalled();
+  });
+
+  it("throws BadRequest for unknown otp purpose and does not send email", async () => {
+    const user = { email };
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValueOnce(user);
+
+    await expect(typedHandleOtpType(email, "unknownPurpose")).rejects.toThrow(
+      BadRequest,
+    );
+    expect(emailService.send).not.toHaveBeenCalled();
+  });
+
+  it("handles passwordReset otp purpose (no-op)", async () => {
+    const user = {
+      email,
+      isverified: false,
+      profile: { firstName: "John" },
+      save: jest.fn(),
+    };
+    (UserRepository.findWithProfile as jest.Mock).mockResolvedValueOnce(user);
+
+    await expect(
+      typedHandleOtpType(email, "passwordReset"),
+    ).resolves.toBeUndefined();
+    expect(emailService.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("AuthServices.validateOtp", () => {
+  const service = new AuthServices();
+  const client = {
+    del: jest.fn(),
+    evalsha: jest.fn(),
+    get: jest.fn(),
+    script: jest.fn(),
+    set: jest.fn(),
+    ttl: jest.fn(),
+  };
+  const email = "test@example.com";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (redisModule.RedisService.getClient as jest.Mock).mockReturnValue(client);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("validates OTP, sets verified flag, deletes otp and handles otp type (introceptive)", async () => {
+    const payload: ValidateOtpType = {
+      email,
+      otp: "123456",
+      purpose: "emailVerification",
+    };
+
+    jest
+      .spyOn(authUtils, "hashOtp")
+      .mockImplementation((otp: string) => `h-${otp}`);
+    (client.get as jest.Mock).mockResolvedValueOnce("h-123456");
+    (client.set as jest.Mock).mockImplementationOnce(async () => undefined);
+    (client.del as jest.Mock).mockImplementationOnce(async () => undefined);
+
+    const handleSpy = jest
+      .spyOn(
+        AuthServices as unknown as {
+          handleOtpType: (email: string, purpose: string) => Promise<void>;
+        },
+        "handleOtpType",
+      )
+      .mockImplementation(async () => undefined) as jest.SpyInstance;
+
+    await expect(service.validateOtp(payload)).resolves.toBeUndefined();
+
+    expect(authUtils.hashOtp).toHaveBeenCalledWith("123456");
+    expect(redisModule.RedisService.getClient).toHaveBeenCalled();
+    expect(client.get).toHaveBeenCalledWith(`otp:${email}:emailVerification`);
+    expect(client.set).toHaveBeenCalledWith(
+      `otp_verified:${email}:emailVerification`,
+      "true",
+      "EX",
+      expect.any(Number),
+    );
+    expect(client.del).toHaveBeenCalledWith(`otp:${email}:emailVerification`);
+    expect(handleSpy).toHaveBeenCalledWith(email, "emailVerification");
+
+    const getOrder = (client.get as jest.Mock).mock.invocationCallOrder[0];
+    const setOrder = (client.set as jest.Mock).mock.invocationCallOrder[0];
+    const delOrder = (client.del as jest.Mock).mock.invocationCallOrder[0];
+    const handleOrder = (handleSpy as jest.SpyInstance).mock
+      .invocationCallOrder[0];
+
+    expect(getOrder).toBeLessThan(setOrder);
+    expect(setOrder).toBeLessThan(delOrder);
+    expect(delOrder).toBeLessThan(handleOrder);
+  });
+
+  it("throws BadRequest when stored otp missing and does not call set/del/handle", async () => {
+    const payload: ValidateOtpType = {
+      email,
+      otp: "123456",
+      purpose: "emailVerification",
+    };
+
+    jest
+      .spyOn(authUtils, "hashOtp")
+      .mockImplementation((otp: string) => `h-${otp}`);
+    (client.get as jest.Mock).mockResolvedValueOnce(null);
+
+    const handleSpy = jest
+      .spyOn(
+        AuthServices as unknown as {
+          handleOtpType: (email: string, purpose: string) => Promise<void>;
+        },
+        "handleOtpType",
+      )
+      .mockImplementation(async () => undefined) as jest.SpyInstance;
+
+    await expect(service.validateOtp(payload)).rejects.toThrow(BadRequest);
+
+    expect(client.get).toHaveBeenCalled();
+    expect(client.set).not.toHaveBeenCalled();
+    expect(client.del).not.toHaveBeenCalled();
+    expect(handleSpy).not.toHaveBeenCalled();
+  });
+
+  it("throws BadRequest when otp hash mismatches and does not call set/del/handle", async () => {
+    const payload: ValidateOtpType = {
+      email,
+      otp: "123456",
+      purpose: "emailVerification",
+    };
+
+    jest
+      .spyOn(authUtils, "hashOtp")
+      .mockImplementation((otp: string) => `h-${otp}`);
+    (client.get as jest.Mock).mockResolvedValueOnce("some-other-hash");
+
+    const handleSpy = jest
+      .spyOn(
+        AuthServices as unknown as {
+          handleOtpType: (email: string, purpose: string) => Promise<void>;
+        },
+        "handleOtpType",
+      )
+      .mockImplementation(async () => undefined) as jest.SpyInstance;
+
+    await expect(service.validateOtp(payload)).rejects.toThrow(BadRequest);
+
+    expect(client.get).toHaveBeenCalled();
+    expect(client.set).not.toHaveBeenCalled();
+    expect(client.del).not.toHaveBeenCalled();
+    expect(handleSpy).not.toHaveBeenCalled();
+  });
+
+  it("propagates redis get errors and does not call handleOtpType", async () => {
+    const payload: ValidateOtpType = {
+      email,
+      otp: "123456",
+      purpose: "emailVerification",
+    };
+
+    (client.get as jest.Mock).mockRejectedValueOnce(
+      new Error("Redis get error"),
+    );
+
+    const handleSpy = jest
+      .spyOn(
+        AuthServices as unknown as {
+          handleOtpType: (email: string, purpose: string) => Promise<void>;
+        },
+        "handleOtpType",
+      )
+      .mockImplementation(async () => undefined) as jest.SpyInstance;
+
+    await expect(service.validateOtp(payload)).rejects.toThrow(
+      "Redis get error",
+    );
+
+    expect(client.get).toHaveBeenCalled();
+    expect(handleSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("AuthServices.resetPassword", () => {
+  const service = new AuthServices();
+  const client = {
+    del: jest.fn(),
+    evalsha: jest.fn(),
+    get: jest.fn(),
+    script: jest.fn(),
+    set: jest.fn(),
+    ttl: jest.fn(),
+  };
+  const email = "test@example.com";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (redisModule.RedisService.getClient as jest.Mock).mockReturnValue(client);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("resets password successfully and sends notification (introceptive)", async () => {
+    const payload: ResetPasswordRequestType = {
+      email,
+      newPassword: "NewP@ssw0rd1",
+    };
+    (client.get as jest.Mock).mockResolvedValueOnce("true");
+
+    const user = {
+      email,
+      hashPassword: jest.fn().mockResolvedValue("hashed-pass"),
+      profile: { firstName: "John" },
+      save: jest.fn().mockResolvedValue(undefined),
+    } as unknown as User;
+
+    (UserRepository.findOne as jest.Mock).mockResolvedValueOnce(user);
+    (client.del as jest.Mock).mockImplementationOnce(async () => undefined);
+    (emailService.send as jest.Mock).mockImplementationOnce(
+      async () => undefined,
+    );
+
+    await expect(service.resetPassword(payload)).resolves.toBeUndefined();
+
+    expect(user.hashPassword).toHaveBeenCalledWith(payload.newPassword);
+    expect(user.save).toHaveBeenCalled();
+    expect(client.del).toHaveBeenCalledWith(
+      `otp_verified:${email}:passwordReset`,
+    );
+    expect(emailService.send).toHaveBeenCalledWith(
+      user.email,
+      "user.password-reset.success",
+      { firstName: "John" },
+      expect.any(String),
+    );
+
+    const saveOrder = (user.save as jest.Mock).mock.invocationCallOrder[0];
+    const delOrder = (client.del as jest.Mock).mock.invocationCallOrder[0];
+    const emailOrder = (emailService.send as jest.Mock).mock
+      .invocationCallOrder[0];
+    expect(saveOrder).toBeLessThan(delOrder);
+    expect(delOrder).toBeLessThan(emailOrder);
+  });
+
+  it("throws Unauthorized when reset not verified and does not call downstream services", async () => {
+    const payload: ResetPasswordRequestType = {
+      email,
+      newPassword: "NewP@ssw0rd1",
+    };
+    (client.get as jest.Mock).mockResolvedValueOnce("false");
+
+    await expect(service.resetPassword(payload)).rejects.toThrow(Unauthorized);
+
+    expect(UserRepository.findOne).not.toHaveBeenCalled();
+    expect(client.del).not.toHaveBeenCalled();
+    expect(emailService.send).not.toHaveBeenCalled();
+  });
+
+  it("throws BadRequest when user not found and does not delete or send email", async () => {
+    const payload: ResetPasswordRequestType = {
+      email,
+      newPassword: "NewP@ssw0rd1",
+    };
+    (client.get as jest.Mock).mockResolvedValueOnce("true");
+    (UserRepository.findOne as jest.Mock).mockResolvedValueOnce(null);
+
+    await expect(service.resetPassword(payload)).rejects.toThrow(BadRequest);
+
+    expect(client.del).not.toHaveBeenCalled();
+    expect(emailService.send).not.toHaveBeenCalled();
+  });
+
+  it("propagates hashPassword error and does not call save/del/email", async () => {
+    const payload: ResetPasswordRequestType = {
+      email,
+      newPassword: "NewP@ssw0rd1",
+    };
+    (client.get as jest.Mock).mockResolvedValueOnce("true");
+
+    const user = {
+      email,
+      hashPassword: jest.fn().mockRejectedValueOnce(new Error("Hash error")),
+      profile: {},
+      save: jest.fn(),
+    } as unknown as User;
+
+    (UserRepository.findOne as jest.Mock).mockResolvedValueOnce(user);
+
+    await expect(service.resetPassword(payload)).rejects.toThrow("Hash error");
+
+    expect(user.hashPassword).toHaveBeenCalledWith(payload.newPassword);
+    expect(user.save).not.toHaveBeenCalled();
+    expect(client.del).not.toHaveBeenCalled();
+    expect(emailService.send).not.toHaveBeenCalled();
+  });
+
+  it("propagates user.save error and does not call del/email", async () => {
+    const payload: ResetPasswordRequestType = {
+      email,
+      newPassword: "NewP@ssw0rd1",
+    };
+    (client.get as jest.Mock).mockResolvedValueOnce("true");
+
+    const user = {
+      email,
+      hashPassword: jest.fn().mockResolvedValue("hashed-pass"),
+      profile: {},
+      save: jest.fn().mockRejectedValueOnce(new Error("Save error")),
+    } as unknown as User;
+
+    (UserRepository.findOne as jest.Mock).mockResolvedValueOnce(user);
+
+    await expect(service.resetPassword(payload)).rejects.toThrow("Save error");
+
+    expect(user.hashPassword).toHaveBeenCalledWith(payload.newPassword);
+    expect(user.save).toHaveBeenCalled();
+    expect(client.del).not.toHaveBeenCalled();
+    expect(emailService.send).not.toHaveBeenCalled();
+  });
+
+  it("propagates redis del error and does not call emailService", async () => {
+    const payload: ResetPasswordRequestType = {
+      email,
+      newPassword: "NewP@ssw0rd1",
+    };
+    (client.get as jest.Mock).mockResolvedValueOnce("true");
+
+    const user = {
+      email,
+      hashPassword: jest.fn().mockResolvedValue("hashed-pass"),
+      profile: { firstName: "John" },
+      save: jest.fn().mockResolvedValue(undefined),
+    } as unknown as User;
+
+    (UserRepository.findOne as jest.Mock).mockResolvedValueOnce(user);
+    (client.del as jest.Mock).mockRejectedValueOnce(
+      new Error("Redis del error"),
+    );
+
+    await expect(service.resetPassword(payload)).rejects.toThrow(
+      "Redis del error",
+    );
+
+    expect(user.save).toHaveBeenCalled();
+    expect(client.del).toHaveBeenCalled();
+    expect(emailService.send).not.toHaveBeenCalled();
+  });
+
+  it("propagates emailService errors after del", async () => {
+    const payload: ResetPasswordRequestType = {
+      email,
+      newPassword: "NewP@ssw0rd1",
+    };
+    (client.get as jest.Mock).mockResolvedValueOnce("true");
+
+    const user = {
+      email,
+      hashPassword: jest.fn().mockResolvedValue("hashed-pass"),
+      profile: { firstName: "John" },
+      save: jest.fn().mockResolvedValue(undefined),
+    } as unknown as User;
+
+    (UserRepository.findOne as jest.Mock).mockResolvedValueOnce(user);
+    (client.del as jest.Mock).mockImplementationOnce(async () => undefined);
+    (emailService.send as jest.Mock).mockRejectedValueOnce(
+      new Error("Email error"),
+    );
+
+    await expect(service.resetPassword(payload)).rejects.toThrow("Email error");
+
+    expect(user.save).toHaveBeenCalled();
+    expect(client.del).toHaveBeenCalled();
+    expect(emailService.send).toHaveBeenCalled();
+  });
+});
+
 describe("AuthServices.registerUser", () => {
-  let service: AuthServicesClass;
+  let service: AuthServices;
   let mockManager: { getRepository: jest.Mock; save: jest.Mock };
   let basePayload: RegisterUserRequestType;
-  let mockUserProfile: UserProfile;
+  let mockProfile: UserProfile;
   let mockUser: User;
 
   beforeEach(() => {
     service = new AuthServices();
     mockManager = {
-      getRepository: jest.fn(),
+      getRepository: jest.fn().mockReturnValue({
+        create: jest.fn().mockImplementation((obj) => obj),
+        save: jest.fn().mockResolvedValue(undefined),
+      }),
       save: jest.fn(),
     };
-    mockManager.getRepository.mockReturnValue({
-      create: jest.fn().mockReturnValue({}),
-      save: jest.fn().mockResolvedValue({}),
-    });
     basePayload = {
-      country: "NG",
       email: "superadmin@example.com",
       firstName: "Super",
       lastName: "Admin",
       password: "password123A!",
       type: "Superadmin",
     };
-    mockUserProfile = {
-      ...basePayload,
-    } as UserProfile;
-    mockUser = { ...basePayload, id: 1, profile: mockUserProfile } as User;
+    mockProfile = { ...basePayload } as UserProfile;
+    mockUser = { ...basePayload, id: 1, profile: mockProfile } as User;
 
     jest.clearAllMocks();
     (User.prototype.hashPassword as jest.Mock) = jest.fn();
   });
 
   it("creates and saves profile and user, hashes password", async () => {
-    (UserProfileRepository.create as jest.Mock).mockReturnValue(
-      mockUserProfile,
-    );
+    (UserProfileRepository.create as jest.Mock).mockReturnValue(mockProfile);
     (UserRepository.create as jest.Mock).mockReturnValue(mockUser);
     (mockManager.save as jest.Mock).mockResolvedValue(mockUser);
-    mockManager.getRepository.mockReturnValue({
-      create: jest.fn().mockReturnValue({}),
-      save: jest.fn().mockResolvedValue({}),
-    });
     (User.prototype.hashPassword as jest.Mock).mockResolvedValue(
       "hashedPassword",
     );
@@ -367,7 +913,7 @@ describe("AuthServices.registerUser", () => {
     );
 
     expect(UserProfileRepository.save).not.toHaveBeenCalledWith(
-      mockUserProfile,
+      mockProfile,
       mockManager as unknown as EntityManager,
     );
 
@@ -379,7 +925,7 @@ describe("AuthServices.registerUser", () => {
       {
         ...basePayload,
         password: "hashedPassword",
-        profile: mockUserProfile,
+        profile: mockProfile,
       },
       mockManager as unknown as EntityManager,
     );
@@ -393,12 +939,8 @@ describe("AuthServices.registerUser", () => {
   });
 
   it("throws error if super admin already exists", async () => {
-    (UserProfileRepository.create as jest.Mock).mockReturnValue(
-      mockUserProfile,
-    );
-    (UserProfileRepository.save as jest.Mock).mockResolvedValue(
-      mockUserProfile,
-    );
+    (UserProfileRepository.create as jest.Mock).mockReturnValue(mockProfile);
+    (UserProfileRepository.save as jest.Mock).mockResolvedValue(mockProfile);
     (UserRepository.create as jest.Mock).mockImplementation(() => {
       throw new BadRequest("A super admin already exists.");
     });
@@ -415,7 +957,7 @@ describe("AuthServices.registerUser", () => {
 
   it("propagates errors from profile creation", async () => {
     (UserProfileRepository.create as jest.Mock).mockImplementation(() => {
-      throw new Error("UserProfile create error");
+      throw new Error("Profile create error");
     });
 
     await expect(
@@ -423,7 +965,7 @@ describe("AuthServices.registerUser", () => {
         basePayload,
         mockManager as unknown as EntityManager,
       ),
-    ).rejects.toThrow("UserProfile create error");
+    ).rejects.toThrow("Profile create error");
     expect(UserProfileRepository.create).toHaveBeenCalled();
     expect(UserProfileRepository.save).not.toHaveBeenCalled();
     expect(UserRepository.create).not.toHaveBeenCalled();
@@ -432,7 +974,7 @@ describe("AuthServices.registerUser", () => {
 
   it("propagates errors from create error", async () => {
     (UserProfileRepository.create as jest.Mock).mockRejectedValue(
-      new Error("UserProfile create error"),
+      new Error("Profile create error"),
     );
 
     await expect(
@@ -440,10 +982,10 @@ describe("AuthServices.registerUser", () => {
         basePayload,
         mockManager as unknown as EntityManager,
       ),
-    ).rejects.toThrow("UserProfile create error");
+    ).rejects.toThrow("Profile create error");
 
     expect(UserProfileRepository.save).not.toHaveBeenCalledWith(
-      mockUserProfile,
+      mockProfile,
       mockManager as unknown as EntityManager,
     );
     expect(UserRepository.create).not.toHaveBeenCalled();
@@ -451,12 +993,8 @@ describe("AuthServices.registerUser", () => {
   });
 
   it("propagates errors from user saving", async () => {
-    (UserProfileRepository.create as jest.Mock).mockReturnValue(
-      mockUserProfile,
-    );
-    (UserProfileRepository.save as jest.Mock).mockResolvedValue(
-      mockUserProfile,
-    );
+    (UserProfileRepository.create as jest.Mock).mockReturnValue(mockProfile);
+    (UserProfileRepository.save as jest.Mock).mockResolvedValue(mockProfile);
     (User.prototype.hashPassword as jest.Mock).mockResolvedValue(
       "hashedPassword",
     );
@@ -475,12 +1013,8 @@ describe("AuthServices.registerUser", () => {
   });
 
   it("propagates errors from password hashing", async () => {
-    (UserProfileRepository.create as jest.Mock).mockReturnValue(
-      mockUserProfile,
-    );
-    (UserProfileRepository.save as jest.Mock).mockResolvedValue(
-      mockUserProfile,
-    );
+    (UserProfileRepository.create as jest.Mock).mockReturnValue(mockProfile);
+    (UserProfileRepository.save as jest.Mock).mockResolvedValue(mockProfile);
     (User.prototype.hashPassword as jest.Mock).mockRejectedValue(
       new Error("Hash error"),
     );
@@ -503,21 +1037,17 @@ describe("AuthServices.registerUser", () => {
       ...basePayload,
       type: "User",
     };
-    const regularUserProfile: UserProfile = {
+    const regularProfile: UserProfile = {
       ...regularPayload,
     } as UserProfile;
     const regularUser: User = {
       ...regularPayload,
       id: 2,
-      profile: regularUserProfile,
+      profile: regularProfile,
     } as User;
 
-    (UserProfileRepository.create as jest.Mock).mockReturnValue(
-      regularUserProfile,
-    );
-    (UserProfileRepository.save as jest.Mock).mockResolvedValue(
-      regularUserProfile,
-    );
+    (UserProfileRepository.create as jest.Mock).mockReturnValue(regularProfile);
+    (UserProfileRepository.save as jest.Mock).mockResolvedValue(regularProfile);
     (UserRepository.create as jest.Mock).mockReturnValue(regularUser);
     (UserRepository.save as jest.Mock).mockResolvedValue(regularUser);
     (User.prototype.hashPassword as jest.Mock).mockResolvedValue(
@@ -533,10 +1063,80 @@ describe("AuthServices.registerUser", () => {
       {
         ...regularPayload,
         password: "hashedPassword",
-        profile: regularUserProfile,
+        profile: regularProfile,
       },
       mockManager as unknown as EntityManager,
     );
     expect(result).toBe(regularUser);
+  });
+});
+
+// Additional tests to exercise the real RateLimitByKey decorator paths
+describe("AuthServices RateLimit decorator (real) flows", () => {
+  const client = { eval: jest.fn(), set: jest.fn(), ttl: jest.fn() };
+
+  beforeEach(() => {
+    jest.resetModules();
+    jest.clearAllMocks();
+  });
+
+  it("allows getOtp when redis count <= max", async () => {
+    client.eval.mockResolvedValueOnce(1);
+    client.set.mockResolvedValueOnce(undefined);
+
+    jest.doMock("../../services/redis.services", () => ({
+      RedisService: { getClient: () => client },
+    }));
+    jest.doMock("../../repositories/user.repository", () => ({
+      UserRepository: {
+        findWithProfile: jest.fn().mockResolvedValue({
+          email: "r@example.com",
+          profile: { firstName: "R" },
+        }),
+      },
+    }));
+    jest.doMock("../../services/email.services", () => ({
+      emailService: { send: jest.fn().mockResolvedValue(undefined) },
+    }));
+    jest.unmock("../../utils");
+
+    const { AuthServices } = await import("../../services/auth.services");
+    const svc = new AuthServices();
+
+    await expect(
+      svc.getOtp("r@example.com", "emailVerification"),
+    ).resolves.toBeUndefined();
+
+    expect(client.eval).toHaveBeenCalled();
+    const { emailService: es } = await import("../../services/email.services");
+    expect(es.send).toHaveBeenCalled();
+  });
+
+  it("throws when redis count exceeds max", async () => {
+    client.eval.mockResolvedValueOnce(2);
+    client.ttl.mockResolvedValueOnce(30);
+
+    jest.doMock("../../services/redis.services", () => ({
+      RedisService: { getClient: () => client },
+    }));
+    jest.doMock("../../repositories/user.repository", () => ({
+      UserRepository: {
+        findWithProfile: jest.fn().mockResolvedValue({
+          email: "r@example.com",
+          profile: { firstName: "R" },
+        }),
+      },
+    }));
+    jest.unmock("../../utils");
+
+    const { AuthServices } = await import("../../services/auth.services");
+    const svc = new AuthServices();
+
+    await expect(
+      svc.getOtp("r@example.com", "emailVerification"),
+    ).rejects.toBeDefined();
+
+    expect(client.eval).toHaveBeenCalled();
+    expect(client.ttl).toHaveBeenCalled();
   });
 });

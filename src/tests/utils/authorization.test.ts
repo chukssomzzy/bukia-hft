@@ -38,7 +38,7 @@ describe("RoleGuard", () => {
   });
 
   it("should call next with Forbidden if user role is not allowed", () => {
-    applyDecorator([UserRole.BUSINESS]);
+    applyDecorator([UserRole.USER]);
     req.user = { role: UserRole.ADMIN };
     handler(req, res, next);
     expect(next).toHaveBeenCalledWith(expect.any(Forbidden));
@@ -71,7 +71,7 @@ describe("RoleGuard", () => {
   });
 
   it("should allow SUPER_ADMIN for any route", () => {
-    applyDecorator([UserRole.ADMIN, UserRole.BUSINESS]);
+    applyDecorator([UserRole.ADMIN, UserRole.USER]);
     req.user = { role: UserRole.SUPER_ADMIN };
     handler(req, res, next);
     expect(next).not.toHaveBeenCalledWith(expect.any(Forbidden));
@@ -79,7 +79,7 @@ describe("RoleGuard", () => {
   });
 
   it("should allow user with allowed role", () => {
-    applyDecorator([UserRole.ADMIN, UserRole.BUSINESS]);
+    applyDecorator([UserRole.ADMIN, UserRole.USER]);
     req.user = { role: UserRole.ADMIN };
     handler(req, res, next);
     expect(next).not.toHaveBeenCalledWith(expect.any(Forbidden));
@@ -88,7 +88,7 @@ describe("RoleGuard", () => {
     next.mockClear();
     originalHandler.mockClear();
 
-    req.user = { role: UserRole.BUSINESS };
+    req.user = { role: UserRole.USER };
     handler(req, res, next);
     expect(next).not.toHaveBeenCalledWith(expect.any(Forbidden));
     expect(originalHandler).toHaveBeenCalledTimes(1);
@@ -112,7 +112,7 @@ describe("RoleGuard", () => {
 
   it("should deny access if allowedRoles is empty and user role is not SUPER_ADMIN", () => {
     applyDecorator([]);
-    req.user = { role: UserRole.BUSINESS };
+    req.user = { role: UserRole.USER };
     handler(req, res, next);
     expect(next).toHaveBeenCalledWith(expect.any(Forbidden));
     expect(originalHandler).not.toHaveBeenCalled();

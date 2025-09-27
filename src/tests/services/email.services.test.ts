@@ -8,6 +8,13 @@ const providerSendMock = jest.fn();
 const providerHealthMock = jest.fn();
 const findByTypesMock = jest.fn();
 
+jest.mock("../../providers", () => ({
+  AwsSesProvider: jest.fn().mockImplementation(() => ({
+    send: providerSendMock,
+    healthCheck: providerHealthMock,
+  })),
+}));
+
 jest.mock("bullmq", () => ({
   Queue: jest
     .fn()
@@ -18,15 +25,8 @@ jest.mock("../../services/redis.services", () => ({
   RedisService: { duplicate: duplicateMock },
 }));
 
-jest.mock("../../utils/email-template", () => ({
+jest.mock("../../utils/templates", () => ({
   renderTemplate: renderTemplateMock,
-}));
-
-jest.mock("../../providers/emails.provider.factory", () => ({
-  getEmailProvider: () => ({
-    healthCheck: providerHealthMock,
-    send: providerSendMock,
-  }),
 }));
 
 jest.mock("../../repositories/user.repository", () => ({
@@ -45,7 +45,6 @@ interface EmailJob {
 describe("EmailService (unit)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // reset EmailService internal queue/init state
     (emailService as unknown as { queue?: unknown }).queue = null;
     (emailService as unknown as { initializing?: unknown }).initializing = null;
   });

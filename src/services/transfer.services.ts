@@ -65,7 +65,12 @@ export class TransferServices {
     while (attempt <= maxRetries) {
       try {
         const trx = await this.executeTransaction(payload);
-        this.sendTransferStatusEmail(payload, "completed", "", trx.transferId);
+        await this.sendTransferStatusEmail(
+          payload,
+          "completed",
+          "",
+          trx.transferId,
+        );
         return trx;
       } catch (err) {
         if (err instanceof PermanentError) {
@@ -73,7 +78,8 @@ export class TransferServices {
             payload.idempotencyKey,
             err.message,
           );
-          return;
+          await this.sendTransferStatusEmail(payload, "failed", err.message);
+          return { transferId: null };
         }
 
         if (this.shouldRetryOptimisticLock(err, attempt, maxRetries)) {
@@ -84,12 +90,22 @@ export class TransferServices {
 
         if (this.isDuplicateKeyError(err)) {
           const reconciled = await this.reconcile(payload.idempotencyKey);
-          if (reconciled) return reconciled;
+          if (reconciled?.transferId)
+            await this.sendTransferStatusEmail(
+              payload,
+              "completed",
+              "",
+              reconciled.transferId,
+            );
+
+          return reconciled ?? { transferId: null };
         }
 
         throw err;
       }
     }
+
+    return { transferId: null };
   }
 
   private async addTransferJob(

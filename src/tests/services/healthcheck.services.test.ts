@@ -1,10 +1,21 @@
 import { HealthService } from "../../services/healthcheck.services";
+/* eslint-disable @typescript-eslint/naming-convention */
 
 jest.mock("../../services/redis.services", () => ({
   RedisService: { healthCheck: jest.fn().mockResolvedValue(true) },
 }));
 jest.mock("../../data-source", () => ({
-  default: { query: jest.fn().mockResolvedValue([1]) },
+  __esModule: true,
+  default: {
+    getRepository: jest
+      .fn()
+      .mockReturnValue({ extend: jest.fn().mockReturnValue({}) }),
+    query: jest.fn().mockResolvedValue([1]),
+  },
+}));
+
+jest.mock("../../services/email.services", () => ({
+  emailService: { healthCheck: jest.fn().mockResolvedValue(true) },
 }));
 
 describe("HealthService.healthCheck", () => {
@@ -12,8 +23,11 @@ describe("HealthService.healthCheck", () => {
   let postgresCheck: jest.SpyInstance;
 
   beforeEach(() => {
-    // Ensure registered services are only redis and postgres for tests
-    (HealthService as unknown as { registered: Array<{ check: () => Promise<boolean>; name: string }> }).registered = [
+    (
+      HealthService as unknown as {
+        registered: Array<{ check: () => Promise<boolean>; name: string }>;
+      }
+    ).registered = [
       { check: jest.fn(), name: "redis" },
       { check: jest.fn(), name: "postgres" },
     ];
@@ -26,7 +40,7 @@ describe("HealthService.healthCheck", () => {
     jest.restoreAllMocks();
   });
 
-  it("should call all registered service health checks", async () => {
+  test("should call all registered service health checks", async () => {
     redisCheck.mockResolvedValue(true);
     postgresCheck.mockResolvedValue(true);
 
@@ -36,7 +50,7 @@ describe("HealthService.healthCheck", () => {
     expect(postgresCheck).toHaveBeenCalled();
   });
 
-  it("should return all healthy when all services are healthy", async () => {
+  test("should return all healthy when all services are healthy", async () => {
     redisCheck.mockResolvedValue(true);
     postgresCheck.mockResolvedValue(true);
 
@@ -47,7 +61,7 @@ describe("HealthService.healthCheck", () => {
     ]);
   });
 
-  it("should return unhealthy for a failing service and introspect call order", async () => {
+  test("should return unhealthy for a failing service and introspect call order", async () => {
     redisCheck.mockResolvedValue(true);
     postgresCheck.mockResolvedValue(false);
 
@@ -60,7 +74,7 @@ describe("HealthService.healthCheck", () => {
     expect(postgresCheck).toHaveBeenCalled();
   });
 
-  it("should handle exceptions and mark service as unhealthy", async () => {
+  test("should handle exceptions and mark service as unhealthy", async () => {
     redisCheck.mockRejectedValue(new Error("Redis error"));
     postgresCheck.mockResolvedValue(true);
 
